@@ -1,6 +1,6 @@
 """Tests for keyword detection."""
 
-from piko.keyword_detector import detect_keywords
+from piko.skills.captions.keyword_detector import detect_keywords
 
 
 def _make_segments(words_data: list[tuple]) -> list[dict]:

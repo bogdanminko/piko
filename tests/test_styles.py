@@ -2,7 +2,7 @@
 
 import pysubs2
 
-from piko.styles import STYLES
+from piko.skills.captions.styles import STYLES
 
 
 SAMPLE_WORDS = [
@@ -91,7 +91,7 @@ def test_minimal_italic_keywords():
 
 def test_generate_full_ass_file():
     """Generate a complete ASS file and verify it's valid."""
-    from piko.subtitle_generator import generate_subtitles
+    from piko.skills.captions import generate_subtitles
 
     segments = [{"words": SAMPLE_WORDS}]
     subs, emoji_timeline = generate_subtitles(segments, style_name="mrbeast")

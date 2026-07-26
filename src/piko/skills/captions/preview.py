@@ -9,7 +9,7 @@ from pathlib import Path
 import pysubs2
 
 from .styles import STYLES
-from .video_processor import FFMPEG
+from ...core.media import FFMPEG
 
 # Canvas matches the typical vertical-video resolution the styles target.
 CANVAS_W = 1080

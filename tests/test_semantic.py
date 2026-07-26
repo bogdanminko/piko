@@ -1,7 +1,7 @@
 """Tests for semantic word coloring."""
 
-from piko.semantic_colors import get_semantic
-from piko.styles import STYLES
+from piko.skills.captions.semantic_colors import get_semantic
+from piko.skills.captions.styles import STYLES
 
 
 def test_english_colors():
