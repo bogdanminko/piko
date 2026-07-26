@@ -324,6 +324,6 @@ struct SidebarView: View {
 
     private var modelLine: String {
         guard let model = modelManager.selectedModel else { return "no model selected" }
-        return "\(model.name) · \(model.sizeMb) MB"
+        return "\(model.name) · ~\(model.ramMb) MB RAM"
     }
 }

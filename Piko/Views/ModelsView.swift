@@ -1,9 +1,9 @@
 import SwiftUI
 
 /// Model management screen. The Transcription section is real and drives
-/// the same ModelManagerVM the pipeline uses; Summary and Alignment models,
-/// the active-models strip and GGUF import are design previews — those
-/// backends don't exist yet (see docs/PRODUCT.md).
+/// the same ModelManagerVM the pipeline uses; Summary and Alignment models
+/// and the active-models strip are design previews — those backends don't
+/// exist yet (see docs/PRODUCT.md).
 struct ModelsView: View {
     @Bindable var modelManager: ModelManagerVM
     @Environment(\.pikoTheme) private var theme
@@ -14,8 +14,11 @@ struct ModelsView: View {
     }
 
     private let summaryStubs = [
-        StubModel(id: "piko-sum-1.7b", meta: "1.7B parameters · Q4_K_M · 1.1 GB on disk"),
-        StubModel(id: "qwen3-8b-instruct", meta: "8.2B parameters · Q4_K_M · 4.7 GB on disk")
+        StubModel(id: "qwen3.6-4b-instruct", meta: "4B parameters · 4-bit · ~2.3 GB on disk"),
+        StubModel(id: "qwen3.6-2b-instruct", meta: "2B parameters · 4-bit · ~1.2 GB on disk"),
+        StubModel(id: "gpt-oss-20b", meta: "20B parameters (MoE) · MXFP4 · ~12 GB on disk"),
+        StubModel(id: "piko-slm-4b", meta: "4B parameters · Piko's own SLM · in development"),
+        StubModel(id: "piko-slm-2b", meta: "2B parameters · Piko's own SLM · in development")
     ]
     private let alignStubs = [
         StubModel(id: "piko-align-80m", meta: "80M parameters · FP16 · 160 MB on disk"),
@@ -231,15 +234,12 @@ struct ModelsView: View {
                     Spacer()
                     ComingSoonBadge()
                 }
-                Text("Quantization picked for unified memory: Q4_K_M for generation, "
-                     + "Q5 for recognition. Drop in your own GGUF — Piko will read its "
-                     + "metadata and list it here.")
+                Text("MLX has its own quantized weight format — Piko's runtime is "
+                     + "Apple-native end to end, no GGUF or llama.cpp involved. "
+                     + "Downloaded models will be listed here.")
                     .font(.system(size: 12))
                     .lineSpacing(3)
                     .foregroundStyle(theme.dim)
-                Button("Import GGUF…") {}
-                    .controlSize(.small)
-                    .disabled(true)
             }
         }
     }
