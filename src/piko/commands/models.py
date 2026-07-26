@@ -1,23 +1,49 @@
-"""Model management commands — list / download / check Whisper models."""
+"""Model management commands — list / download / check ASR models."""
 
 from __future__ import annotations
 
+from ..core.memory import MODEL_PEAK_MB
 from ..protocol import emit
 
-WHISPER_MODELS = [
-    {"id": "mlx-community/whisper-large-v3-mlx-8bit", "name": "Large V3 (8-bit)", "size_mb": 1600},
-    {"id": "mlx-community/whisper-large-v3-turbo", "name": "Large V3 Turbo", "size_mb": 1500},
-    {"id": "mlx-community/whisper-large-v3-mlx-4bit", "name": "Large V3 (4-bit)", "size_mb": 900},
-    {"id": "mlx-community/whisper-medium-mlx", "name": "Medium", "size_mb": 1500},
-    {"id": "mlx-community/whisper-tiny", "name": "Tiny", "size_mb": 75},
+# "speed" and "quality" are bench-measured tiers (bench/asr/README.md):
+# parakeet@mlx-audio bf16 (0.32 s/min) is fastest; turbo@mlx-whisper
+# (1.91 s/min) medium; large-v3-8bit (3.94 s/min) slowest. WER is a
+# near-tie across all three (4.7-4.8%), hence "high" quality on all — the
+# point is that parakeet's speed doesn't cost quality. ram_mb is the peak
+# RSS estimate from core/memory.py's MODEL_PEAK_MB, not download size.
+ASR_MODELS = [
+    {
+        "id": "mlx-community/parakeet-tdt-0.6b-v3",
+        "name": "Parakeet TDT v3",
+        "size_mb": 2300,
+        "ram_mb": MODEL_PEAK_MB["mlx-community/parakeet-tdt-0.6b-v3"],
+        "speed": "fast",
+        "quality": "high",
+    },
+    {
+        "id": "mlx-community/whisper-large-v3-turbo",
+        "name": "Large V3 Turbo",
+        "size_mb": 1500,
+        "ram_mb": MODEL_PEAK_MB["mlx-community/whisper-large-v3-turbo"],
+        "speed": "medium",
+        "quality": "high",
+    },
+    {
+        "id": "mlx-community/whisper-large-v3-mlx-8bit",
+        "name": "Large V3 (8-bit)",
+        "size_mb": 1600,
+        "ram_mb": MODEL_PEAK_MB["mlx-community/whisper-large-v3-mlx-8bit"],
+        "speed": "slow",
+        "quality": "high",
+    },
 ]
 
 
 def handle_list_models(params: dict) -> None:
-    """List available Whisper models and their download status."""
+    """List available ASR models and their download status."""
     from huggingface_hub import scan_cache_dir
 
-    models_info = [dict(m) for m in WHISPER_MODELS]
+    models_info = [dict(m) for m in ASR_MODELS]
 
     try:
         cache_info = scan_cache_dir()

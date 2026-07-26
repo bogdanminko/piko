@@ -6,6 +6,7 @@ emits protocol messages via piko.protocol.emit.
 
 from __future__ import annotations
 
+from .broll_pack import handle_download_broll_pack, handle_fetch_broll, handle_search_broll
 from .models import handle_check_model, handle_download_model, handle_list_models
 from .previews import handle_style_previews
 from .render import handle_process, handle_render
@@ -19,4 +20,7 @@ HANDLERS = {
     "list_models": handle_list_models,
     "download_model": handle_download_model,
     "check_model": handle_check_model,
+    "download_broll_pack": handle_download_broll_pack,
+    "fetch_broll": handle_fetch_broll,
+    "search_broll": handle_search_broll,
 }

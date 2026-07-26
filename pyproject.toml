@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "huggingface-hub>=1.27.0",
+    "mlx-audio>=0.2.4",
     "mlx-whisper>=0.4.3",
     "pillow>=12.3.0",
     "pysubs2>=1.8.1",
@@ -32,6 +33,7 @@ dev = [
 target-version = "py313"
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["bench"]
 
 [tool.ruff.lint]
 select = [
@@ -49,6 +51,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]  # pytest asserts
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.mypy]
 python_version = "3.13"
 files = ["src/piko", "tests"]
@@ -58,5 +63,5 @@ warn_redundant_casts = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["mlx_whisper.*", "pysubs2.*", "huggingface_hub.*", "PIL.*"]
+module = ["mlx_whisper.*", "mlx_audio.*", "mlx.*", "pysubs2.*", "huggingface_hub.*", "PIL.*"]
 ignore_missing_imports = true

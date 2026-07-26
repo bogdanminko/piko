@@ -1,5 +1,36 @@
 import Foundation
 
+/// Every live backend process, so the app can take them down on quit
+/// (a child Process does not die with its parent on its own).
+final class BackendProcessRegistry: @unchecked Sendable {
+    static let shared = BackendProcessRegistry()
+
+    private let lock = NSLock()
+    private var processes: Set<Process> = []
+
+    func register(_ process: Process) {
+        lock.lock()
+        processes.insert(process)
+        lock.unlock()
+    }
+
+    func unregister(_ process: Process) {
+        lock.lock()
+        processes.remove(process)
+        lock.unlock()
+    }
+
+    func terminateAll() {
+        lock.lock()
+        let running = processes
+        processes.removeAll()
+        lock.unlock()
+        for process in running where process.isRunning {
+            process.terminate()
+        }
+    }
+}
+
 enum BackendError: LocalizedError {
     case bootstrapFailed(String)
 
@@ -110,6 +141,8 @@ actor BackendService {
                     process.standardError = stderrPipe
 
                     try process.run()
+                    BackendProcessRegistry.shared.register(process)
+                    defer { BackendProcessRegistry.shared.unregister(process) }
 
                     // Build and write command JSON to stdin
                     var cmdDict: [String: Any] = ["command": command]

@@ -28,6 +28,13 @@ struct BackendMessage: Decodable {
     let model: String?
     let style: String?
     let previews: [String: String]?
+    /// Realtime progress: seconds of media handled / total ("01:20 of 03:45").
+    let processedSeconds: Double?
+    let totalSeconds: Double?
+    /// How many local b-roll clips were cut into the render.
+    let brollInserts: Int?
+    /// Openly licensed candidates returned by search_broll.
+    let clips: [BrollClip]?
 
     init(type: String, stage: String? = nil, percent: Double? = nil,
          message: String? = nil, success: Bool? = nil,
@@ -37,7 +44,9 @@ struct BackendMessage: Decodable {
          models: [WhisperModel]? = nil, code: String? = nil,
          downloaded: Bool? = nil, cached: Bool? = nil,
          model: String? = nil, style: String? = nil,
-         previews: [String: String]? = nil) {
+         previews: [String: String]? = nil,
+         processedSeconds: Double? = nil, totalSeconds: Double? = nil,
+         brollInserts: Int? = nil, clips: [BrollClip]? = nil) {
         self.type = type
         self.stage = stage
         self.percent = percent
@@ -56,6 +65,10 @@ struct BackendMessage: Decodable {
         self.model = model
         self.style = style
         self.previews = previews
+        self.processedSeconds = processedSeconds
+        self.totalSeconds = totalSeconds
+        self.brollInserts = brollInserts
+        self.clips = clips
     }
 
     enum CodingKeys: String, CodingKey {
@@ -67,6 +80,28 @@ struct BackendMessage: Decodable {
         case wordCount = "word_count"
         case keywordsFound = "keywords_found"
         case models, code, downloaded, cached, model, style, previews
+        case processedSeconds = "processed_seconds"
+        case totalSeconds = "total_seconds"
+        case brollInserts = "broll_inserts"
+        case clips
+    }
+}
+
+/// One openly licensed b-roll candidate from Wikimedia Commons.
+struct BrollClip: Codable, Identifiable, Hashable {
+    let title: String
+    let url: String
+    let license: String
+    let width: Int?
+    let sizeMb: Double?
+    /// Still-frame preview URL from Commons (jpg).
+    let thumb: String?
+
+    var id: String { url }
+
+    enum CodingKeys: String, CodingKey {
+        case title, url, license, width, thumb
+        case sizeMb = "size_mb"
     }
 }
 
@@ -74,11 +109,15 @@ struct WhisperModel: Codable, Identifiable {
     let id: String
     let name: String
     let sizeMb: Int
+    let ramMb: Int
+    let speed: String
+    let quality: String
     var downloaded: Bool
 
     enum CodingKeys: String, CodingKey {
-        case id, name
+        case id, name, speed, quality
         case sizeMb = "size_mb"
+        case ramMb = "ram_mb"
         case downloaded
     }
 }

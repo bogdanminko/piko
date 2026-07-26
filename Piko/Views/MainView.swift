@@ -1,162 +1,138 @@
 import SwiftUI
 
+/// App shell from the design mockup: fixed sidebar navigation on the left,
+/// themed content pane on the right. Captions is the working vertical;
+/// Library and Meeting Summary are design previews until their backends ship.
 struct MainView: View {
+    @State private var appState = AppState()
     @State private var processor = VideoProcessorVM()
     @State private var modelManager = ModelManagerVM()
     @State private var stylePreviews = StylePreviewsVM()
+    @State private var history = HistoryStore()
 
     var body: some View {
-        NavigationSplitView {
-            StylePickerView(processor: processor, previews: stylePreviews)
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240)
-        } detail: {
-            detailContent
+        let theme = appState.theme
+        HStack(spacing: 0) {
+            // Top spacing for the hidden-title-bar traffic lights is handled
+            // inside the sidebar (the brand row sits beside them).
+            SidebarView(appState: appState, modelManager: modelManager,
+                        history: history, processor: processor)
+                .background { sidebarBackground }
+
+            Rectangle()
+                .fill(theme.line)
+                .frame(width: 1)
+                .ignoresSafeArea()
+
+            screenContent
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background { paneBackground }
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                ModelPickerView(modelManager: modelManager)
-            }
-        }
+        .environment(\.pikoTheme, theme)
+        .preferredColorScheme(theme.colorScheme)
+        .tint(theme.accent)
+        .frame(minWidth: 1000, minHeight: 660)
         .task {
+            processor.onRenderCompleted = { [weak processor, weak history] in
+                guard let processor, let history, let url = processor.videoURL else { return }
+                history.record(
+                    videoURL: url,
+                    style: processor.selectedStyle.displayName,
+                    language: processor.detectedLanguage,
+                    wordCount: processor.wordCount
+                )
+            }
             async let models: Void = modelManager.loadModels()
             async let previews: Void = stylePreviews.load()
             _ = await (models, previews)
         }
-        // Any subtitle setting changed after a completed run (sidebar or
-        // preview screen): fast re-render from the cached transcription —
+        // Any subtitle setting changed after a completed run (settings panel
+        // or preview screen): fast re-render from the cached transcription —
         // or an instant swap if that combination was already rendered.
         .onChange(of: processor.selectedStyle) { rerenderIfDone() }
         .onChange(of: processor.wordMode) { rerenderIfDone() }
         .onChange(of: processor.highlightColorHex) { rerenderIfDone() }
+        .onChange(of: processor.brollEnabled) { rerenderIfDone() }
+        // No Generate button: processing starts as soon as a video arrives
+        // (drop, file picker, Recent) — or as soon as the model is ready.
+        .onChange(of: processor.videoURL) { autoProcess() }
+        .onChange(of: modelManager.isSelectedModelDownloaded) { autoProcess() }
+        // A finished session doesn't linger: navigating away from (or back
+        // to) Captions after the run completed resets to the drop zone.
+        // An in-flight run keeps its state; reopening is one click in
+        // Recent. Entries opened from Recent arrive in .idle, so they are
+        // never swept by this.
+        .onChange(of: appState.screen) { oldScreen, newScreen in
+            guard oldScreen == .captions || newScreen == .captions else { return }
+            switch processor.state {
+            case .done, .error:
+                processor.reset()
+            default:
+                break
+            }
+        }
+    }
+
+    private func autoProcess() {
+        guard processor.videoURL != nil,
+              case .idle = processor.state,
+              modelManager.isSelectedModelDownloaded
+        else { return }
+        Task { await processor.processVideo(modelId: modelManager.selectedModelId) }
+    }
+
+    @ViewBuilder
+    private var screenContent: some View {
+        switch appState.screen {
+        case .library:
+            LibraryView(appState: appState, processor: processor, history: history)
+        case .summary:
+            MeetingSummaryView()
+        case .captions:
+            CaptionsScreen(
+                appState: appState,
+                processor: processor,
+                modelManager: modelManager,
+                stylePreviews: stylePreviews
+            )
+        case .models:
+            ModelsView(modelManager: modelManager)
+        case .appearance:
+            AppearanceView(appState: appState)
+        }
+    }
+
+    @ViewBuilder
+    private var sidebarBackground: some View {
+        let theme = appState.theme
+        if appState.translucent {
+            ZStack {
+                VisualEffectBackground(material: .sidebar)
+                theme.chrome.opacity(0.6)
+            }
+            .ignoresSafeArea()
+        } else {
+            theme.chrome.ignoresSafeArea()
+        }
+    }
+
+    @ViewBuilder
+    private var paneBackground: some View {
+        let theme = appState.theme
+        if appState.translucent {
+            ZStack {
+                VisualEffectBackground(material: .underWindowBackground)
+                theme.pane.opacity(0.8)
+            }
+            .ignoresSafeArea()
+        } else {
+            theme.pane.ignoresSafeArea()
+        }
     }
 
     private func rerenderIfDone() {
         if case .done = processor.state {
             Task { await processor.reRender() }
         }
-    }
-
-    @ViewBuilder
-    private var detailContent: some View {
-        switch processor.state {
-        case .idle:
-            DropZoneView(processor: processor, modelManager: modelManager)
-
-        case .processing(_, let percent, let message):
-            ProcessingView(percent: percent, message: message)
-
-        case .done:
-            PreviewView(
-                processor: processor,
-                stylePreviews: stylePreviews,
-                onReset: { processor.reset() }
-            )
-
-        case .error(let message):
-            ErrorView(message: message, onRetry: { processor.reset() })
-        }
-    }
-}
-
-// MARK: - Drop Zone
-
-struct DropZoneView: View {
-    @Bindable var processor: VideoProcessorVM
-    @Bindable var modelManager: ModelManagerVM
-
-    var body: some View {
-        VStack(spacing: 20) {
-            Spacer()
-
-            if let videoURL = processor.videoURL {
-                // Video selected — show info and process button
-                VStack(spacing: 16) {
-                    Image(systemName: "film")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.blue)
-
-                    Text(videoURL.lastPathComponent)
-                        .font(.title3.bold())
-
-                    Text("Style: \(processor.selectedStyle.displayName)")
-                        .foregroundStyle(.secondary)
-
-                    Button("Generate Subtitles") {
-                        Task {
-                            await processor.processVideo(modelId: modelManager.selectedModelId)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .disabled(processor.isProcessing)
-
-                    Button("Choose Different Video") {
-                        processor.selectFile()
-                    }
-                    .controlSize(.small)
-                }
-            } else {
-                // No video — drop zone
-                VStack(spacing: 16) {
-                    Image(systemName: "arrow.down.doc")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.secondary)
-
-                    Text("Drop Video Here")
-                        .font(.title2.bold())
-
-                    Text("or click to browse")
-                        .foregroundStyle(.secondary)
-                }
-                .onTapGesture {
-                    processor.selectFile()
-                }
-            }
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(
-            RoundedRectangle(cornerRadius: 16)
-                .strokeBorder(style: StrokeStyle(lineWidth: 2, dash: [8]))
-                .foregroundStyle(.quaternary)
-                .padding()
-        )
-        .onDrop(of: [.movie, .fileURL], isTargeted: nil) { providers in
-            processor.handleDrop(providers: providers)
-        }
-    }
-}
-
-// MARK: - Error View
-
-struct ErrorView: View {
-    let message: String
-    let onRetry: () -> Void
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Spacer()
-
-            Image(systemName: "exclamationmark.triangle")
-                .font(.system(size: 48))
-                .foregroundStyle(.red)
-
-            Text("Error")
-                .font(.title2.bold())
-
-            Text(message)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 40)
-
-            Button("Try Again") {
-                onRetry()
-            }
-            .buttonStyle(.borderedProminent)
-
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

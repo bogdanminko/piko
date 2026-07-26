@@ -1,12 +1,19 @@
+import AVFoundation
 import SwiftUI
 import UniformTypeIdentifiers
 
 @Observable
 class VideoProcessorVM {
+    private static let brollKey = "piko.brollEnabled"
+
     var videoURL: URL?
     var selectedStyle: SubtitleStyleType = .mrbeast
     var wordMode: WordMode = .static
     var highlightColorHex: String = highlightPalette[0].hex
+    /// Cut in clips from the local BRoll library during renders. Persisted.
+    var brollEnabled: Bool = UserDefaults.standard.bool(forKey: brollKey) {
+        didSet { UserDefaults.standard.set(brollEnabled, forKey: Self.brollKey) }
+    }
     var state: ProcessingState = .idle
     var progressPercent: Double = 0
     var progressMessage: String = ""
@@ -16,18 +23,54 @@ class VideoProcessorVM {
     var wordCount: Int = 0
     var keywordsFound: Int = 0
 
+    /// Fired every time a render completes (including instant cache swaps);
+    /// the shell uses it to update the session history.
+    var onRenderCompleted: (() -> Void)?
+
+    // --- Run metrics ---
+    // Timestamps cover the full pipeline run (transcribe + render); style
+    // re-renders afterwards deliberately don't touch them.
+
+    private(set) var runStartedAt: Date?
+    private(set) var runFinishedAt: Date?
+    /// Source media duration in seconds (for the realtime factor).
+    private(set) var mediaDuration: Double = 0
+
+    /// Live "processed X of Y media seconds" from the current stage.
+    private(set) var processedMediaSeconds: Double?
+    private(set) var totalMediaSeconds: Double?
+
+    var processingSeconds: Double? {
+        guard let started = runStartedAt, let finished = runFinishedAt else { return nil }
+        return finished.timeIntervalSince(started)
+    }
+
+    /// Words transcribed per second of processing.
+    var wordsPerSecond: Double? {
+        guard let secs = processingSeconds, secs > 0, wordCount > 0 else { return nil }
+        return Double(wordCount) / secs
+    }
+
+    /// The standard ASR speed metric: audio duration / processing time
+    /// ("2.4× realtime").
+    var realtimeFactor: Double? {
+        guard let secs = processingSeconds, secs > 0, mediaDuration > 0 else { return nil }
+        return mediaDuration / secs
+    }
+
     /// Path of the cached transcription JSON; set after the first (slow)
     /// pass so style changes only need a fast re-render.
     private(set) var transcriptionPath: String?
 
     /// Finished renders for this video, keyed by output path (one per
     /// style/mode/color combination) — switching back is instant.
-    private struct RenderResult {
+    /// Disk-persistence helpers live in VideoProcessorVM+RenderDiskCache.
+    struct RenderResult {
         let outputPath: String
         let subtitlePath: String
         let keywordsFound: Int
     }
-    private var renderCache: [String: RenderResult] = [:]
+    var renderCache: [String: RenderResult] = [:]
 
     private let backend = BackendService()
 
@@ -113,6 +156,7 @@ class VideoProcessorVM {
         transcriptionPath = nil
         outputURL = nil
         subtitleURL = nil
+        UserDefaults.standard.removeObject(forKey: Self.renderMetaKey)
         if case .done = state {
             state = .idle
         }
@@ -166,6 +210,11 @@ class VideoProcessorVM {
         guard let videoURL else { return }
 
         state = .processing(stage: "starting", percent: 0, message: "Starting...")
+        runStartedAt = Date()
+        runFinishedAt = nil
+        processedMediaSeconds = nil
+        totalMediaSeconds = nil
+        mediaDuration = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
 
         // Stage 1: transcription — mapped to 0...70% of overall progress.
         let params: [String: Any] = [
@@ -182,6 +231,10 @@ class VideoProcessorVM {
                     state = .processing(stage: message.stage ?? "", percent: pct, message: msg)
                     progressPercent = pct
                     progressMessage = msg
+                    if let processed = message.processedSeconds {
+                        processedMediaSeconds = processed
+                        totalMediaSeconds = message.totalSeconds ?? totalMediaSeconds
+                    }
 
                 case "result" where message.success == true:
                     transcriptionPath = message.transcriptionPath
@@ -203,6 +256,10 @@ class VideoProcessorVM {
 
         // Stage 2: render — mapped to 70...100%.
         await render(progressBase: 70, progressSpan: 30)
+
+        if case .done = state {
+            runFinishedAt = Date()
+        }
     }
 
     /// Re-render with the current style using the cached transcription.
@@ -216,6 +273,9 @@ class VideoProcessorVM {
                 suffix += "_\(highlightColorHex.dropFirst().lowercased())"
             }
         }
+        if brollEnabled {
+            suffix += "_broll"
+        }
         return suffix
     }
 
@@ -225,22 +285,30 @@ class VideoProcessorVM {
         await render(progressBase: 0, progressSpan: 100)
     }
 
-    private func render(progressBase: Double, progressSpan: Double) async {
+    /// Bypasses the render cache and asks the backend to redo the current
+    /// render from scratch. The cache keys only on settings (style/mode/
+    /// broll on-off), not on the b-roll library's contents — so adding or
+    /// changing clips after a render already exists at that path wouldn't
+    /// otherwise be picked up until the source video's mtime changes.
+    func forceRerender() async {
+        guard canReRender, !isProcessing else { return }
+        await render(progressBase: 0, progressSpan: 100, force: true)
+    }
+
+    private func render(progressBase: Double, progressSpan: Double, force: Bool = false) async {
         guard let videoURL, let transcriptionPath else { return }
 
         let style = selectedStyle.rawValue
         let baseName = videoURL.deletingPathExtension().lastPathComponent
         let outputPath = rendersDir
             .appendingPathComponent(baseName + renderSuffix(style: style) + ".mp4").path
+        let subtitlePath = (outputPath as NSString).deletingPathExtension + ".ass"
 
         // Already rendered with these exact settings — reuse instantly.
-        if let cached = renderCache[outputPath],
-           FileManager.default.fileExists(atPath: cached.outputPath) {
-            outputURL = URL(fileURLWithPath: cached.outputPath)
-            subtitleURL = URL(fileURLWithPath: cached.subtitlePath)
-            keywordsFound = cached.keywordsFound
-            state = .done(outputPath: cached.outputPath,
-                          subtitlePath: cached.subtitlePath)
+        // The output path encodes every setting, so a file on disk from a
+        // previous session is just as good as this session's cache (the
+        // .ass sits next to it; mtime check guards against edited sources).
+        if !force, serveFromCache(outputPath: outputPath, subtitlePath: subtitlePath, source: videoURL) {
             return
         }
 
@@ -254,7 +322,8 @@ class VideoProcessorVM {
             "style": style,
             "output_path": outputPath,
             "word_mode": wordMode.rawValue,
-            "highlight_color": highlightColorHex
+            "highlight_color": highlightColorHex,
+            "broll": brollEnabled
         ]
 
         for await message in await backend.execute(command: "render", params: params) {
@@ -267,6 +336,10 @@ class VideoProcessorVM {
                     state = .processing(stage: message.stage ?? "", percent: pct, message: msg)
                     progressPercent = pct
                     progressMessage = msg
+                    if let processed = message.processedSeconds {
+                        processedMediaSeconds = processed
+                        totalMediaSeconds = message.totalSeconds ?? totalMediaSeconds
+                    }
 
                 case "result" where message.success == true:
                     if let outPath = message.outputPath, let subPath = message.subtitlePath {
@@ -280,7 +353,9 @@ class VideoProcessorVM {
                             subtitlePath: subPath,
                             keywordsFound: message.keywordsFound ?? 0
                         )
+                        Self.rememberKeywords(message.keywordsFound ?? 0, for: outPath)
                         state = .done(outputPath: outPath, subtitlePath: subPath)
+                        onRenderCompleted?()
                     }
 
                 case "error":
@@ -302,5 +377,10 @@ class VideoProcessorVM {
         renderCache = [:]
         progressPercent = 0
         progressMessage = ""
+        runStartedAt = nil
+        runFinishedAt = nil
+        mediaDuration = 0
+        processedMediaSeconds = nil
+        totalMediaSeconds = nil
     }
 }

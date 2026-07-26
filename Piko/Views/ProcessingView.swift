@@ -3,6 +3,13 @@ import SwiftUI
 struct ProcessingView: View {
     let percent: Double
     let message: String
+    var processedSeconds: Double?
+    var totalSeconds: Double?
+
+    private func clock(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        return String(format: "%02d:%02d", total / 60, total % 60)
+    }
 
     var body: some View {
         VStack(spacing: 24) {
@@ -15,6 +22,14 @@ struct ProcessingView: View {
 
             Text("Processing Video")
                 .font(.title2.bold())
+
+            // Live media position: how much of the recording is done.
+            if let processed = processedSeconds, let total = totalSeconds, total > 0 {
+                Text("\(clock(processed)) / \(clock(total))")
+                    .font(.title3.monospacedDigit().weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .contentTransition(.numericText())
+            }
 
             VStack(spacing: 8) {
                 ProgressView(value: percent, total: 100)

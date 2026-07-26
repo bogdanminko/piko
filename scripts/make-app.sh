@@ -8,9 +8,15 @@ swift build -c release
 
 APP="build/Piko.app"
 rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cp .build/release/Piko "$APP/Contents/MacOS/Piko"
+
+# App icon — regenerate with scripts/make-icon.sh if missing.
+if [ ! -f assets/icon/Piko.icns ]; then
+    ./scripts/make-icon.sh
+fi
+cp assets/icon/Piko.icns "$APP/Contents/Resources/Piko.icns"
 
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -21,6 +27,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>Piko</string>
     <key>CFBundleIdentifier</key>
     <string>dev.bogdanminko.piko</string>
+    <key>CFBundleIconFile</key>
+    <string>Piko</string>
     <key>CFBundleName</key>
     <string>Piko</string>
     <key>CFBundlePackageType</key>

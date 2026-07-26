@@ -94,13 +94,43 @@ Word-level Whisper timestamps flow through:
 
 `generate_subtitles()` returns `(SSAFile, emoji_timeline)` — a tuple, not just the file.
 
+### B-roll cut-ins (local, no network)
+
+`render`/`process` accept `"broll": true`. Clips come from a user-managed
+library at `~/Library/Application Support/Piko/BRoll/<concept>/*.mp4` —
+folder names are canonical **English** concepts (e.g. `dog`, `fire`,
+`green`); `CONCEPT_LEXICON` in `core/broll.py` maps each concept onto its
+EN/RU/DE/FR keyword stems, so an English folder still fires on "собака" or
+"Hund" (aliases.txt inside a folder adds extra keywords on top; matching
+is stem-prefix, see `_matches()`). `canonical_concept()` folds free text in
+any of those languages onto its concept name — `fetch_broll` uses it so
+typing "лошадь" or "cheval" both land in the same `horse` folder instead of
+forking duplicates. Folders from before this migration (Russian names) are
+renamed to their canonical English name on first scan, merging into an
+existing folder of that name if present (`_migrate_legacy_folders()`,
+`LEGACY_FOLDER_NAMES`). The planner walks word timestamps (skip first 1.5s,
+≥4s between inserts, ≤6 total, ~2.2s each), rotates clips per concept
+across renders (state in the cache dir), composes full-frame cut-ins with
+ffmpeg (`compose_broll`, audio untouched) and then burns subtitles on top.
+The Swift toggle lives in the captions settings panel. `download_broll_pack`
+(button "Get Starter Pack") fetches a curated set of openly licensed clips
+(CC0/PD/CC BY only — Wikimedia Commons + NASA, manifest in
+`commands/broll_pack.py`, includes a few color concepts that pair with
+`semantic_colors.py`'s word painting), normalizes them (h264, no audio,
+≤1280px, trimmed) and writes ATTRIBUTION.txt per concept folder.
+`fetch_broll` (the "Fetch" row in the B-roll section) is the keyless
+generic handle: searches Wikimedia Commons for any query with the same
+license filter and downloads top hits into a concept folder. Deliberately
+no stock APIs that need accounts/keys (Pexels etc.) — the user can always
+drop manually downloaded clips into the folders instead.
+
 ### Emoji: never in ASS text
 
 **libass cannot rasterize Apple Color Emoji** (renders tofu boxes) — this was tested exhaustively (fontsdir, direct font name, coretext provider). Emojis are therefore rendered to transparent PNGs via Pillow (`emoji_renderer.py`, `embedded_color=True`, cached in `~/Library/Caches/piko/emoji/`) and composited by ffmpeg `overlay` filters centered above the subtitle block (`burn_subtitles(emoji_overlays=...)`). The timeline is trimmed so consecutive emojis never stack on screen. Do not put emoji characters into ASS event text.
 
 ### Style previews
 
-`style_previews` renders each style's sample line on black through the same ass+overlay ffmpeg pipeline (not a SwiftUI imitation), cached as PNG strips in `~/Library/Caches/piko/previews/`. Shown in the sidebar and in the result screen's style switcher. Regenerate with `{"command":"style_previews","params":{"force":true}}` after changing any style's look.
+`style_previews` renders each style's sample line on a dark gradient (no emoji overlay) through the same ass ffmpeg pipeline (not a SwiftUI imitation), cached as PNG strips in `~/Library/Caches/piko/previews/`. Shown in the sidebar and in the result screen's style switcher. Regenerate with `{"command":"style_previews","params":{"force":true}}` after changing any style's look.
 
 ## Hard-won gotchas
 

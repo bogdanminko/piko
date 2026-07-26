@@ -11,9 +11,13 @@ import sys
 
 from .commands import HANDLERS
 from .protocol import emit
+from .watchdog import start as start_watchdog
 
 
 def main() -> None:
+    # Don't outlive the app: exit (with children) once the parent is gone.
+    start_watchdog()
+
     raw = sys.stdin.read()
     if not raw.strip():
         emit({"type": "error", "message": "No input received", "code": "NO_INPUT"})
