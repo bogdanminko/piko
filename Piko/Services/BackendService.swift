@@ -15,16 +15,26 @@ actor BackendService {
     private let projectRoot: URL
 
     init() {
-        // Find project root (where pyproject.toml lives)
-        // In development, this is the working directory
-        let bundle = Bundle.main.bundleURL
-        // Try to find pyproject.toml by walking up from bundle
-        var dir = bundle
-        for _ in 0..<5 {
-            dir = dir.deletingLastPathComponent()
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("pyproject.toml").path) {
-                self.projectRoot = dir
-                return
+        // The Python backend lives in the repo, not in the app bundle (dev
+        // setup by design). Walk up looking for pyproject.toml from:
+        // 1. the bundle path — works for build/Piko.app inside the repo;
+        // 2. this source file's compile-time path — works when Xcode or
+        //    `swift run` builds a bare executable into DerivedData/.build,
+        //    far away from the repo.
+        let candidates = [
+            Bundle.main.bundleURL,
+            URL(fileURLWithPath: #filePath),
+        ]
+        for start in candidates {
+            var dir = start
+            for _ in 0..<6 {
+                dir = dir.deletingLastPathComponent()
+                if FileManager.default.fileExists(
+                    atPath: dir.appendingPathComponent("pyproject.toml").path
+                ) {
+                    self.projectRoot = dir
+                    return
+                }
             }
         }
         // Fallback: current working directory
