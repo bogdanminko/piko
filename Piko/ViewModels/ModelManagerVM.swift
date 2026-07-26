@@ -7,7 +7,7 @@ class ModelManagerVM {
         WhisperModel(id: "mlx-community/whisper-large-v3-turbo", name: "Large V3 Turbo", sizeMb: 1500, downloaded: false),
         WhisperModel(id: "mlx-community/whisper-large-v3-mlx-4bit", name: "Large V3 (4-bit)", sizeMb: 900, downloaded: false),
         WhisperModel(id: "mlx-community/whisper-medium-mlx", name: "Medium", sizeMb: 1500, downloaded: false),
-        WhisperModel(id: "mlx-community/whisper-tiny", name: "Tiny", sizeMb: 75, downloaded: false),
+        WhisperModel(id: "mlx-community/whisper-tiny", name: "Tiny", sizeMb: 75, downloaded: false)
     ]
     var selectedModelId: String = "mlx-community/whisper-large-v3-mlx-8bit"
     var isDownloading: Bool = false

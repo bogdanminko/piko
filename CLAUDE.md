@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Piko** — an open-source local AI workspace for macOS, powered by small models. Everything runs locally on Apple Silicon. See [docs/PRODUCT.md](docs/PRODUCT.md) for the full product context: the core model is `Input → Artifact → Skill → Model → Result → Export`.
+**Piko** — an open-source local AI workspace for macOS, powered by small models. Everything runs locally on Apple Silicon. See [docs/PRODUCT.md](docs/PRODUCT.md) for the product context (who it's for, priorities, what not to build) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design direction: the core model is `Input → Artifact → Skill → Model → Result → Export`.
 
 Currently implemented: the **captions skill** — burns "viral-style" animated subtitles (MrBeast/TikTok look) into videos. The next vertical is **Meeting Summary** (see PRODUCT.md); don't build agents, marketplaces, or extra inference providers before that ships.
 
 Two layers communicating over a JSON protocol:
 
 - **Python backend** (`src/piko/`) — mlx-whisper transcription, ASS subtitle generation (pysubs2), ffmpeg burn-in. Managed by `uv`.
-- **SwiftUI frontend** (`Piko/`) — built with **SPM, not Xcode** (no .xcodeproj; Xcode is not installed on this machine, only Command Line Tools).
+- **SwiftUI frontend** (`Piko/`) — built with **SPM, not Xcode** (no .xcodeproj; builds with plain `swift build` and does not depend on Xcode being installed).
 
 ## Commands
 
@@ -29,7 +29,14 @@ open build/Piko.app
 
 # Swift compile check only
 swift build
+
+# Quality gate (also runs as a pre-commit hook and in CI)
+uv run ruff check && uv run ruff format --check
+uv run mypy
+XCODE_DEFAULT_TOOLCHAIN_OVERRIDE=/Library/Developer/CommandLineTools swiftlint --strict
 ```
+
+Lint/type/test gates: ruff + mypy (config in `pyproject.toml`), SwiftLint (`.swiftlint.yml`), pytest incl. protocol-contract tests (`tests/test_protocol.py` — checks every `emit()` key is decodable by `BackendMessage.swift` and that stdout stays JSON-only). Pre-commit (`.pre-commit-config.yaml`) runs all of the above plus gitleaks/shellcheck/large-file guard; CI (`.github/workflows/ci.yml`) runs on PRs and pushes to main. The `XCODE_DEFAULT_TOOLCHAIN_OVERRIDE` env var is needed for SwiftLint's SourceKit on CLT-only machines (no Xcode).
 
 ffmpeg/ffprobe are hardcoded to `/opt/homebrew/bin/` (`src/piko/core/media.py`). The Swift side (`Piko/Services/BackendService.swift`) bootstraps the backend venv once with `uv sync --frozen` (stamp file `.venv/piko-uv.lock.stamp` holds the uv.lock contents the venv was built from; it re-syncs only when uv.lock changes) and then always launches `<root>/.venv/bin/python -m piko.main` directly — deliberately not `uv run`, so uv can never re-resolve or update anything at app launch.
 
@@ -76,7 +83,7 @@ Transcription is decoupled from rendering so style/animation changes never re-ru
 1. `transcribe` → cached JSON in `~/Library/Caches/piko/transcriptions/<sha1(path+mtime+model+lang)>.json`; returns `transcription_path`.
 2. `render` → takes `transcription_path` + style + word_mode + highlight_color, generates .ass, burns with ffmpeg (~sub-second for short clips).
 
-The Swift `VideoProcessorVM` additionally keeps a per-session render cache keyed by output path (which encodes style+mode+color), so switching back to an already-rendered combination swaps files instantly without calling the backend. Output goes to `piko_output/` next to the source video by default; user can override the folder (persisted in UserDefaults key `outputDirOverride`).
+The Swift `VideoProcessorVM` additionally keeps a per-session render cache keyed by output path (which encodes style+mode+color), so switching back to an already-rendered combination swaps files instantly without calling the backend. The app never writes next to the user's video: renders and .ass files go to `~/Library/Caches/piko/renders/`, and the user exports explicitly via the Save Video… / Save Subtitles… buttons (NSSavePanel + copy). The sidebar's "Clear Cache" button wipes the whole `~/Library/Caches/piko` directory (style previews regenerate on the next `style_previews` call). The `piko_output/` default in `commands/render.py` only applies to CLI use without an explicit `output_path`.
 
 ### Captions skill (`src/piko/skills/captions/`)
 
@@ -98,7 +105,7 @@ Word-level Whisper timestamps flow through:
 ## Hard-won gotchas
 
 - **SPM + AVKit**: `Package.swift` must keep `.linkedFramework("AVKit")`. SPM autolinks only the `_AVKit_SwiftUI` overlay; without AVKit itself the app crashes at runtime (`getSuperclassMetadata` abort) the moment `VideoPlayer` appears.
-- **BackendService project-root discovery** walks up from the bundle path looking for `pyproject.toml` — the app only works when `build/Piko.app` lives inside the repo (dev setup by design).
+- **BackendService project-root discovery** walks up looking for `pyproject.toml` from the bundle path (covers `build/Piko.app` inside the repo) and from `#filePath` (covers bare-executable runs via Xcode/`swift run`, which build into DerivedData/`.build`). Both are dev-machine assumptions by design.
 - **Swift concurrency**: `swift build` treats some Swift-6 concurrency issues as warnings; don't mutate captured locals inside the `MainActor.run` closures in VM stream loops.
 - After changing UI state flow, remember `MainView` re-renders on changes of `selectedStyle`, `wordMode`, `highlightColorHex` via `.onChange` → `reRender()` (only when state is `.done`).
 - Renaming/moving: project was renamed creit→piko in-place; if the venv or Swift `.build` cache misbehaves after a rename, delete `.venv`/`.build` and rebuild.

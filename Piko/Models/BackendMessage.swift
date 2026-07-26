@@ -103,10 +103,12 @@ struct AnyCodable: Encodable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
-        if let v = value as? String { try container.encode(v) }
-        else if let v = value as? Int { try container.encode(v) }
-        else if let v = value as? Double { try container.encode(v) }
-        else if let v = value as? Bool { try container.encode(v) }
-        else { try container.encodeNil() }
+        switch value {
+        case let string as String: try container.encode(string)
+        case let int as Int: try container.encode(int)
+        case let double as Double: try container.encode(double)
+        case let bool as Bool: try container.encode(bool)
+        default: try container.encodeNil()
+        }
     }
 }

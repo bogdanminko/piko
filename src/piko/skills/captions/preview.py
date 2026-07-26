@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pysubs2
 
-from .styles import STYLES
 from ...core.media import FFMPEG
+from .styles import STYLES
 
 # Canvas matches the typical vertical-video resolution the styles target.
 CANVAS_W = 1080
@@ -23,8 +23,7 @@ FRAME_TIME = 1.5
 SAMPLE_WORDS = [
     {"word": "This", "start": 0.4, "end": 0.8, "probability": 0.99},
     {"word": " is", "start": 0.8, "end": 1.1, "probability": 0.99},
-    {"word": " amazing", "start": 1.1, "end": 1.9, "probability": 0.99,
-     "is_keyword": True},
+    {"word": " amazing", "start": 1.1, "end": 1.9, "probability": 0.99, "is_keyword": True},
     {"word": " content", "start": 1.9, "end": 2.6, "probability": 0.99},
 ]
 SAMPLE_EMOJI = "\U0001f525"
@@ -53,15 +52,20 @@ def _render_preview(style_name: str, out_path: Path, emoji_png: Path) -> None:
         crop_y = CANVAS_H - CROP_H
         cmd = [
             FFMPEG,
-            "-f", "lavfi",
-            "-i", f"color=c=black:s={CANVAS_W}x{CANVAS_H}:d=2",
-            "-i", str(emoji_png),
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s={CANVAS_W}x{CANVAS_H}:d=2",
+            "-i",
+            str(emoji_png),
             "-filter_complex",
             f"[0:v]ass='{ass_str}',crop={CANVAS_W}:{CROP_H}:0:{crop_y}[base];"
             f"[1:v]scale=-1:96[e];"
             f"[base][e]overlay=x=(main_w-overlay_w)/2:y=16",
-            "-ss", str(FRAME_TIME),
-            "-frames:v", "1",
+            "-ss",
+            str(FRAME_TIME),
+            "-frames:v",
+            "1",
             "-y",
             str(out_path),
         ]
@@ -78,6 +82,7 @@ def generate_style_previews(output_dir: str | Path, force: bool = False) -> dict
     out.mkdir(parents=True, exist_ok=True)
 
     from .emoji_renderer import render_emoji
+
     emoji_png = render_emoji(SAMPLE_EMOJI, out.parent / "emoji")
 
     previews: dict[str, str] = {}

@@ -2,25 +2,24 @@
 
 from __future__ import annotations
 
-from pysubs2 import SSAEvent, SSAStyle, Color
+from pysubs2 import Alignment, Color, SSAEvent, SSAStyle
 
 from .base import BaseStyle
 
 
 class KaraokeStyle(BaseStyle):
-
     def get_styles(self) -> dict[str, SSAStyle]:
         return {
             "Karaoke": SSAStyle(
                 fontname="Arial",
                 fontsize=62,
                 bold=True,
-                primarycolor=Color(0, 255, 255, 0),        # Yellow (highlighted)
-                secondarycolor=Color(180, 180, 180, 0),    # Gray (pre-highlight)
+                primarycolor=Color(0, 255, 255, 0),  # Yellow (highlighted)
+                secondarycolor=Color(180, 180, 180, 0),  # Gray (pre-highlight)
                 outlinecolor=Color(0, 0, 0, 0),
                 outline=2.5,
                 shadow=1.0,
-                alignment=2,
+                alignment=Alignment.BOTTOM_CENTER,
                 marginv=50,
             ),
         }
@@ -37,9 +36,7 @@ class KaraokeStyle(BaseStyle):
 
                 if sem or w.get("is_keyword"):
                     color = sem or "\\c&H00FF00&"
-                    parts.append(
-                        f"{{\\kf{duration_cs}{color}}}{text}{{\\r}}"
-                    )
+                    parts.append(f"{{\\kf{duration_cs}{color}}}{text}{{\\r}}")
                 else:
                     parts.append(f"{{\\kf{duration_cs}}}{text}")
 

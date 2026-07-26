@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pysubs2 import SSAStyle, Color
+from pysubs2 import Alignment, Color, SSAStyle
 
 from .base import BaseStyle
 
@@ -16,7 +16,6 @@ KEYWORD_COLORS = [
 
 
 class HormoziStyle(BaseStyle):
-
     ass_style_name = "Hormozi"
     max_words = 4
     fade = r"{\fad(80,80)}"
@@ -35,7 +34,7 @@ class HormoziStyle(BaseStyle):
                 outlinecolor=Color(0, 0, 0, 0),
                 outline=3.0,
                 shadow=0.0,
-                alignment=2,
+                alignment=Alignment.BOTTOM_CENTER,
                 marginv=50,
             ),
         }

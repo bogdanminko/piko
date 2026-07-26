@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pysubs2 import SSAStyle, Color
+from pysubs2 import Alignment, Color, SSAStyle
 
 from .base import BaseStyle
 
 
 class MinimalStyle(BaseStyle):
-
     ass_style_name = "Minimal"
     max_words = 6
     max_duration = 4.0
@@ -24,7 +23,7 @@ class MinimalStyle(BaseStyle):
                 outlinecolor=Color(0, 0, 0, 80),
                 outline=1.5,
                 shadow=0.0,
-                alignment=2,
+                alignment=Alignment.BOTTOM_CENTER,
                 marginv=40,
                 spacing=1.0,
             ),
@@ -33,8 +32,11 @@ class MinimalStyle(BaseStyle):
     def decorate_word(self, w: dict) -> str:
         sem = self.semantic_tag(w)
         if w.get("is_keyword"):
-            return f"{{{sem}\\i1}}{w['word']}{{\\i0}}{{\\r}}" if sem \
+            return (
+                f"{{{sem}\\i1}}{w['word']}{{\\i0}}{{\\r}}"
+                if sem
                 else f"{{\\i1}}{w['word']}{{\\i0}}"
+            )
         if sem:
             return f"{{{sem}}}{w['word']}{{\\r}}"
         return w["word"]

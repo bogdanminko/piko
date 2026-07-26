@@ -1,210 +1,65 @@
-# Piko — Product Context
+# Piko — Product
 
-## What Piko is
+**Open-source local AI workspace for macOS, powered by small models.**
 
-Piko is an open-source, local-first macOS app that turns local AI models into understandable tools for working with video, audio, text, and files.
+> Small models. Useful skills. Everything stays on your Mac.
 
-**Small local AI for your Mac.**
+## Who it's for
 
-The user can either:
+*Working hypothesis — validate with the first real users.*
 
-1. Pick a specific tool themselves and fine-tune the result.
-2. Hand the material to an assistant that selects and chains the right tools on its own.
+People who work on a Mac and accumulate recordings they never get value from:
+remote workers drowning in calls, creators clipping long footage, students with
+lectures. They are not AI enthusiasts — they will not install Ollama, pick
+quantizations, or tune prompts. What makes them choose Piko: it works out of
+the box, costs no subscription, and nothing leaves their machine.
 
-All data stays on the Mac by default.
+## Why Piko and not the alternatives
 
-## What Piko is not
+- **Cloud meeting tools (Granola, Fireflies, …)** — recordings and transcripts
+  never leave the Mac; no subscription; works offline. For anyone whose calls
+  contain client or company material, "local" is a requirement, not a feature.
+- **MacWhisper and transcription apps** — Piko's unit is not a transcript but a
+  finished result: a styled video, a summary you can *verify*. Every claim in a
+  summary links back to the moment in the recording it came from; one click
+  jumps there. Verifiability is the differentiator, and it matters more than
+  polished prose.
+- **LM Studio and chat UIs** — no chat, no prompting, no model babysitting.
+  Drop a file, get a result. Piko is not a replacement for LM Studio and does
+  not compete with it.
 
-Piko is not yet another LLM chat UI and not a replacement for LM Studio.
+## Product principles
 
-The core unit of the product is not a message — it is a **result**:
+1. **The unit is a result, not a message** — a subtitled video, a summary, a
+   list of action items. Never an open-ended conversation.
+2. **Verifiable by construction** — whenever possible, every generated claim
+   links to the source fragment that supports it.
+3. **Zero setup** — one app. Models download in-app as three tiers (**fast /
+   balanced / quality**) sized against the machine's RAM; the biggest default
+   tier must run comfortably on a 16 GB M-series Mac. No external servers, no
+   second app to install. Power users get a custom-model escape hatch in
+   settings, not a longer picker.
+4. **Local by default** — all processing on-device.
 
-- a video with subtitles;
-- a transcript;
-- a meeting summary;
-- a list of decisions and action items;
-- study notes;
-- chapters and highlights;
-- a transformed or analyzed file.
+## Shipped
 
-## Core product model
+**Captions** — Video → Transcription → Timed Captions → Styled Video.
+Not a separate app; the first skill inside the Piko system.
 
-```text
-Input → Artifact → Skill → Model → Result → Export
-```
+## Now building: Meeting Summary
 
-### Artifact
+Audio/Video → Transcription → Structured Summary → Editable Result → Export.
 
-Any user material:
-
-- video;
-- audio;
-- transcript;
-- document;
-- image;
-- a set of files.
-
-An Artifact stores the original, its metadata, and derived results: transcript, timecodes, subtitles, summaries, and exports.
-
-### Skill
-
-A finished operation with a predictable result:
-
-- Generate Subtitles
-- Style Captions
-- Summarize Meeting
-- Extract Action Items
-- Find Highlights
-- Chat With Video
-- Create Chapters
-
-A Skill defines its inputs, model, prompt, processing stages, and result format.
-
-### Assistant
-
-An Assistant consists of:
-
-- a system prompt;
-- a set of available skills;
-- a selected model;
-- memory and settings;
-- permissions.
-
-In normal mode the user runs skills manually. In Agent Mode the assistant picks and chains them itself. Both run on the same engine underneath.
-
-## What already exists
-
-The first working vertical scenario:
-
-```text
-Video → Transcription → Timed Captions → Styled Video
-```
-
-It should not be treated as a separate app. It is the first skill inside the overall Piko system.
-
-## Next vertical scenario
-
-**Meeting Summary** is the second end-to-end feature:
-
-```text
-Audio / Video
-→ Transcription
-→ Semantic Segmentation
-→ Structured Summary
-→ Decisions and Action Items
-→ Editable Result
-→ Markdown / JSON Export
-```
-
-Result format:
-
-- brief summary;
-- main topics;
-- decisions made;
-- action items with assignee and due date when stated;
-- open questions;
-- key quotes;
-- links to the corresponding timecodes.
-
-Every claim should, whenever possible, be linked to a fragment of the transcript. This matters more than polished prose: the user must be able to verify the result.
-
-## Model Runtime
-
-Piko must not depend on a single inference engine.
-
-Base interface:
-
-```text
-ModelRuntime
-├── Apple Foundation Models
-├── Embedded MLX
-└── OpenAI-compatible server
-    ├── LM Studio
-    └── other local servers
-```
-
-A Skill requests model capabilities, not a specific model name:
-
-- summarization;
-- structured output;
-- vision;
-- tool calling;
-- required context length.
-
-## First-version UI
-
-Main sections:
-
-- **Library** — all added materials and results.
-- **Tools** — manual skill launcher.
-- **Assistants** — downloaded or user-created assistants.
-- **Models** — installed models and runtimes.
-- **Runs** — active and completed processes.
-
-The main screen can start with a single action:
-
-> Drop anything.
-
-After a file is added, Piko shows the applicable skills or offers to hand the material to an assistant.
-
-## Nearest milestone
-
-The user drops in an hour-long call recording and gets, fully locally:
+**Definition of done** — the user drops an hour-long call recording and, fully
+locally on a 16 GB M-series Mac without swapping, gets:
 
 - a transcript with timecodes;
-- a verifiable summary;
-- decisions;
-- action items;
-- a Markdown file;
-- the ability to jump from a summary item to the source moment in the recording.
+- a brief summary, main topics, decisions, action items (with assignee and due
+  date when stated), open questions, key quotes;
+- every item linked to its timecode — one click jumps to that moment;
+- an editable result and Markdown export.
 
-This is the first scenario that simultaneously validates the architecture of artifacts, skills, models, run history, and export.
+Until every line above works end-to-end, Meeting Summary is not done.
 
-## What NOT to build yet
-
-Until Meeting Summary is finished, do not build:
-
-- a universal autonomous agent;
-- a travel assistant;
-- a marketplace;
-- cloud sync;
-- complex long-term memory;
-- ten inference providers;
-- model fine-tuning from the UI.
-
-## Own SLM work
-
-Lock down the evaluation pipeline first; tune the model only after that.
-
-Order of work:
-
-1. Collect 30–50 diverse meetings.
-2. Annotate decisions, action items, topics, and factual errors.
-3. Compare several models and prompts.
-4. Save Piko's failed outputs as training examples.
-5. Build a teacher-generated dataset and manually verify a portion of it.
-6. Run SFT/LoRA on a model up to 2B parameters.
-7. Release the model, adapters, quantizations, and eval results as separate Hugging Face repositories.
-
-Key metrics:
-
-- factual precision;
-- coverage of decisions and action items;
-- correctness of assignees and due dates;
-- groundedness relative to the transcript;
-- structural stability;
-- latency;
-- peak memory;
-- model size.
-
-## Positioning
-
-**Piko is an open-source local AI workspace for macOS, powered by small models.**
-
-Short formula:
-
-> **Small models. Useful skills. Everything stays on your Mac.**
-
-Product mechanic:
-
-> **Do it yourself—or hand it off.**
+*Technical shape of artifacts, skills, and the model runtime lives in
+[ARCHITECTURE.md](ARCHITECTURE.md) — direction, not commitment.*

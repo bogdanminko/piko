@@ -18,7 +18,7 @@ def _transcription_cache_path(video_path: str, model: str, language: str | None)
     p = Path(video_path)
     mtime = p.stat().st_mtime_ns if p.exists() else 0
     key = f"{p.resolve()}:{mtime}:{model}:{language or 'auto'}"
-    digest = hashlib.sha1(key.encode()).hexdigest()[:16]
+    digest = hashlib.sha1(key.encode(), usedforsecurity=False).hexdigest()[:16]
     return CACHE_DIR / "transcriptions" / f"{digest}.json"
 
 
@@ -36,13 +36,20 @@ def transcribe_video(video_path: str, model: str, language: str | None) -> dict:
 
     from ..core.transcriber import transcribe  # slow import (mlx)
 
-    emit({"type": "progress", "stage": "extracting", "percent": 0,
-          "message": "Extracting audio..."})
+    emit(
+        {"type": "progress", "stage": "extracting", "percent": 0, "message": "Extracting audio..."}
+    )
     audio_path = extract_audio(video_path)
 
     try:
-        emit({"type": "progress", "stage": "transcribing", "percent": 10,
-              "message": "Transcribing audio..."})
+        emit(
+            {
+                "type": "progress",
+                "stage": "transcribing",
+                "percent": 10,
+                "message": "Transcribing audio...",
+            }
+        )
         result = transcribe(str(audio_path), model=model, language=language)
     finally:
         audio_path.unlink(missing_ok=True)
@@ -71,13 +78,15 @@ def handle_transcribe(params: dict) -> None:
 
     try:
         data = transcribe_video(video_path, model, language)
-        emit({
-            "type": "result",
-            "success": True,
-            "transcription_path": data["path"],
-            "language": data["language"],
-            "word_count": count_words(data["segments"]),
-            "cached": data["cached"],
-        })
+        emit(
+            {
+                "type": "result",
+                "success": True,
+                "transcription_path": data["path"],
+                "language": data["language"],
+                "word_count": count_words(data["segments"]),
+                "cached": data["cached"],
+            }
+        )
     except Exception as e:
         emit({"type": "error", "message": str(e), "code": type(e).__name__})

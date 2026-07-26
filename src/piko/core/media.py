@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 FFMPEG = "/opt/homebrew/bin/ffmpeg"
@@ -14,10 +15,14 @@ def get_video_resolution(video_path: str | Path) -> tuple[int, int]:
     """Get video width and height using ffprobe."""
     cmd = [
         FFPROBE,
-        "-v", "error",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=width,height",
-        "-of", "csv=p=0:s=x",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=width,height",
+        "-of",
+        "csv=p=0:s=x",
         str(video_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -29,9 +34,12 @@ def get_video_duration(video_path: str | Path) -> float:
     """Get video duration in seconds using ffprobe."""
     cmd = [
         FFPROBE,
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "csv=p=0",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "csv=p=0",
         str(video_path),
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -45,11 +53,15 @@ def extract_audio(video_path: str | Path) -> Path:
 
     cmd = [
         FFMPEG,
-        "-i", str(video_path),
+        "-i",
+        str(video_path),
         "-vn",
-        "-acodec", "pcm_s16le",
-        "-ar", "16000",
-        "-ac", "1",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
         "-y",
         str(audio_path),
     ]
@@ -61,7 +73,7 @@ def burn_subtitles(
     video_path: str | Path,
     ass_path: str | Path,
     output_path: str | Path,
-    progress_callback: callable | None = None,
+    progress_callback: Callable[[float], None] | None = None,
     emoji_overlays: list[dict] | None = None,
     video_height: int = 1080,
 ) -> None:
@@ -95,8 +107,7 @@ def burn_subtitles(
                 f":enable='between(t,{ov['start']:.3f},{ov['end']:.3f})'[{nxt}]"
             )
             label = nxt
-        filter_args = ["-filter_complex", ";".join(chains), "-map", "[out]",
-                       "-map", "0:a?"]
+        filter_args = ["-filter_complex", ";".join(chains), "-map", "[out]", "-map", "0:a?"]
     else:
         filter_args = ["-vf", f"ass='{ass_str}'"]
 
@@ -104,10 +115,14 @@ def burn_subtitles(
         FFMPEG,
         *inputs,
         *filter_args,
-        "-c:a", "copy",
-        "-c:v", "libx264",
-        "-preset", "fast",
-        "-crf", "18",
+        "-c:a",
+        "copy",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "fast",
+        "-crf",
+        "18",
         "-y",
         str(output_path),
     ]
@@ -125,11 +140,7 @@ def burn_subtitles(
                 try:
                     time_str = line.split("time=")[1].split(" ")[0]
                     parts = time_str.split(":")
-                    seconds = (
-                        float(parts[0]) * 3600
-                        + float(parts[1]) * 60
-                        + float(parts[2])
-                    )
+                    seconds = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
                     progress_callback(seconds)
                 except (IndexError, ValueError):
                     pass

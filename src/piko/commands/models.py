@@ -36,15 +36,26 @@ def handle_download_model(params: dict) -> None:
     from huggingface_hub import snapshot_download
 
     model_id = params["model"]
-    emit({"type": "progress", "stage": "downloading", "percent": 0,
-          "message": f"Downloading {model_id}..."})
+    emit(
+        {
+            "type": "progress",
+            "stage": "downloading",
+            "percent": 0,
+            "message": f"Downloading {model_id}...",
+        }
+    )
 
     try:
         path = snapshot_download(repo_id=model_id)
-        emit({"type": "progress", "stage": "downloading", "percent": 100,
-              "message": "Download complete"})
-        emit({"type": "result", "success": True,
-              "message": f"Model downloaded to {path}"})
+        emit(
+            {
+                "type": "progress",
+                "stage": "downloading",
+                "percent": 100,
+                "message": "Download complete",
+            }
+        )
+        emit({"type": "result", "success": True, "message": f"Model downloaded to {path}"})
     except Exception as e:
         emit({"type": "error", "message": str(e), "code": "DOWNLOAD_ERROR"})
 
@@ -60,5 +71,4 @@ def handle_check_model(params: dict) -> None:
     except Exception:
         downloaded = False
 
-    emit({"type": "result", "success": True, "downloaded": downloaded,
-          "model": model_id})
+    emit({"type": "result", "success": True, "downloaded": downloaded, "model": model_id})

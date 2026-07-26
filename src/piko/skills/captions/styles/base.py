@@ -40,9 +40,7 @@ class BaseStyle(ABC):
         self.video_width = video_width
         self.video_height = video_height
         self.word_mode = word_mode if word_mode in WORD_MODES else "static"
-        self.highlight_tag = self._hex_to_ass_color(
-            highlight_color or DEFAULT_HIGHLIGHT
-        )
+        self.highlight_tag = self._hex_to_ass_color(highlight_color or DEFAULT_HIGHLIGHT)
 
     @staticmethod
     def _hex_to_ass_color(hex_color: str) -> str:
@@ -91,8 +89,7 @@ class BaseStyle(ABC):
             if self.word_mode in ("reveal", "highlight"):
                 for i, w in enumerate(line):
                     start = self.ms(w["start"])
-                    end = (self.ms(line[i + 1]["start"])
-                           if i + 1 < len(line) else line_end)
+                    end = self.ms(line[i + 1]["start"]) if i + 1 < len(line) else line_end
                     if end <= start:
                         end = start + 10
 
@@ -103,16 +100,23 @@ class BaseStyle(ABC):
                         parts[i] = self._highlighted_word(w)
                         text = "".join(parts)
 
-                    events.append(SSAEvent(
-                        start=start, end=end,
-                        style=self.ass_style_name, text=text,
-                    ))
+                    events.append(
+                        SSAEvent(
+                            start=start,
+                            end=end,
+                            style=self.ass_style_name,
+                            text=text,
+                        )
+                    )
             else:
-                events.append(SSAEvent(
-                    start=self.ms(line[0]["start"]), end=line_end,
-                    style=self.ass_style_name,
-                    text=self.fade + "".join(decorated),
-                ))
+                events.append(
+                    SSAEvent(
+                        start=self.ms(line[0]["start"]),
+                        end=line_end,
+                        style=self.ass_style_name,
+                        text=self.fade + "".join(decorated),
+                    )
+                )
         return events
 
     def group_words(

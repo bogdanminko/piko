@@ -11,7 +11,6 @@ from .keyword_detector import detect_keywords
 from .semantic_colors import get_semantic
 from .styles import STYLES
 
-
 # How long an emoji overlay stays on screen after its word starts.
 EMOJI_HOLD_SECONDS = 1.6
 
@@ -52,15 +51,17 @@ def generate_subtitles(
             emoji = get_emoji(w["word"])
 
         if emoji:
-            emoji_timeline.append({
-                "emoji": emoji,
-                "start": w["start"],
-                "end": w["start"] + EMOJI_HOLD_SECONDS,
-            })
+            emoji_timeline.append(
+                {
+                    "emoji": emoji,
+                    "start": w["start"],
+                    "end": w["start"] + EMOJI_HOLD_SECONDS,
+                }
+            )
 
     # Overlays share one screen position — trim each entry so it
     # disappears when the next emoji arrives instead of stacking.
-    for cur, nxt in zip(emoji_timeline, emoji_timeline[1:]):
+    for cur, nxt in zip(emoji_timeline, emoji_timeline[1:], strict=False):
         cur["end"] = min(cur["end"], nxt["start"])
 
     # Create ASS file
@@ -74,8 +75,9 @@ def generate_subtitles(
         available = ", ".join(STYLES.keys())
         raise ValueError(f"Unknown style '{style_name}'. Available: {available}")
 
-    style = style_cls(video_width, video_height,
-                      word_mode=word_mode, highlight_color=highlight_color)
+    style = style_cls(
+        video_width, video_height, word_mode=word_mode, highlight_color=highlight_color
+    )
 
     # Register styles
     for name, ssa_style in style.get_styles().items():

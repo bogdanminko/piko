@@ -31,7 +31,7 @@ let highlightPalette: [(name: String, hex: String)] = [
     ("Green", "#3DFF6E"),
     ("Orange", "#FF9500"),
     ("Pink", "#FF5AC8"),
-    ("Red", "#FF3B30"),
+    ("Red", "#FF3B30")
 ]
 
 enum SubtitleStyleType: String, CaseIterable, Identifiable {

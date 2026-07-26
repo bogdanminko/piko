@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pysubs2 import SSAStyle, Color
+from pysubs2 import Alignment, Color, SSAStyle
 
 from .base import BaseStyle
 
 
 class MrBeastStyle(BaseStyle):
-
     ass_style_name = "MrBeast"
     max_words = 4
     fade = r"{\fad(100,100)}"
@@ -24,7 +23,7 @@ class MrBeastStyle(BaseStyle):
                 backcolor=Color(0, 0, 0, 128),
                 outline=4.0,
                 shadow=2.0,
-                alignment=2,  # bottom center
+                alignment=Alignment.BOTTOM_CENTER,
                 marginv=60,
             ),
         }

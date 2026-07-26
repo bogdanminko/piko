@@ -23,5 +23,40 @@ packages = ["src/piko"]
 
 [dependency-groups]
 dev = [
+    "mypy>=2.3.0",
     "pytest>=9.0.2",
+    "ruff>=0.16.0",
 ]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle / pyflakes
+    "I",             # import sorting
+    "UP",            # pyupgrade
+    "B",             # bugbear
+    "S",             # bandit (security)
+    "T20",           # no print/pprint — stdout is the JSON protocol
+]
+ignore = [
+    "S603",  # subprocess without shell=True is exactly what we want
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # pytest asserts
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src/piko", "tests"]
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["mlx_whisper.*", "pysubs2.*", "huggingface_hub.*", "PIL.*"]
+ignore_missing_imports = true

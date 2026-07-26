@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from .mrbeast import MrBeastStyle
 from .hormozi import HormoziStyle
-from .tiktok import TikTokStyle
 from .karaoke import KaraokeStyle
 from .minimal import MinimalStyle
+from .mrbeast import MrBeastStyle
+from .tiktok import TikTokStyle
 
 STYLES: dict[str, type] = {
     "mrbeast": MrBeastStyle,

@@ -1,0 +1,22 @@
+included:
+  - Piko
+  - Package.swift
+
+opt_in_rules:
+  - empty_count
+  - closure_spacing
+  - contains_over_first_not_nil
+  - redundant_nil_coalescing
+
+line_length:
+  warning: 130
+  error: 160
+
+identifier_name:
+  min_length: 2
+
+# SwiftUI view bodies get long; keep the signal, relax the noise
+type_body_length:
+  warning: 400
+function_body_length:
+  warning: 80

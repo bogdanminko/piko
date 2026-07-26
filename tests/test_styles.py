@@ -4,20 +4,56 @@ import pysubs2
 
 from piko.skills.captions.styles import STYLES
 
-
 SAMPLE_WORDS = [
-    {"word": " This", "start": 0.0, "end": 0.3, "probability": 0.8,
-     "is_keyword": False, "keyword_score": 0},
-    {"word": " is", "start": 0.3, "end": 0.5, "probability": 0.9,
-     "is_keyword": False, "keyword_score": 0},
-    {"word": " AMAZING", "start": 0.6, "end": 1.2, "probability": 0.95,
-     "is_keyword": True, "keyword_score": 3, "emoji": "\U0001f525"},
-    {"word": " content", "start": 1.3, "end": 1.7, "probability": 0.85,
-     "is_keyword": False, "keyword_score": 1},
-    {"word": " for", "start": 1.8, "end": 2.0, "probability": 0.9,
-     "is_keyword": False, "keyword_score": 0},
-    {"word": " you", "start": 2.1, "end": 2.4, "probability": 0.88,
-     "is_keyword": False, "keyword_score": 0},
+    {
+        "word": " This",
+        "start": 0.0,
+        "end": 0.3,
+        "probability": 0.8,
+        "is_keyword": False,
+        "keyword_score": 0,
+    },
+    {
+        "word": " is",
+        "start": 0.3,
+        "end": 0.5,
+        "probability": 0.9,
+        "is_keyword": False,
+        "keyword_score": 0,
+    },
+    {
+        "word": " AMAZING",
+        "start": 0.6,
+        "end": 1.2,
+        "probability": 0.95,
+        "is_keyword": True,
+        "keyword_score": 3,
+        "emoji": "\U0001f525",
+    },
+    {
+        "word": " content",
+        "start": 1.3,
+        "end": 1.7,
+        "probability": 0.85,
+        "is_keyword": False,
+        "keyword_score": 1,
+    },
+    {
+        "word": " for",
+        "start": 1.8,
+        "end": 2.0,
+        "probability": 0.9,
+        "is_keyword": False,
+        "keyword_score": 0,
+    },
+    {
+        "word": " you",
+        "start": 2.1,
+        "end": 2.4,
+        "probability": 0.88,
+        "is_keyword": False,
+        "keyword_score": 0,
+    },
 ]
 
 
@@ -59,6 +95,7 @@ def test_hormozi_uppercases():
     for event in events:
         # Extract raw text (strip ASS tags)
         import re
+
         raw = re.sub(r"\{[^}]*\}", "", event.text)
         # Should be all uppercase (ignoring emojis and spaces)
         alpha_chars = [c for c in raw if c.isalpha()]

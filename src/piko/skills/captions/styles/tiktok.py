@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from pysubs2 import SSAEvent, SSAStyle, Color
+from pysubs2 import Alignment, Color, SSAEvent, SSAStyle
 
 from .base import BaseStyle
 
 
 class TikTokStyle(BaseStyle):
-
     def get_styles(self) -> dict[str, SSAStyle]:
         return {
             "TikTok": SSAStyle(
@@ -22,7 +21,7 @@ class TikTokStyle(BaseStyle):
                 borderstyle=3,  # opaque box
                 outline=0.0,
                 shadow=0.0,
-                alignment=2,
+                alignment=Alignment.BOTTOM_CENTER,
                 marginv=80,
             ),
         }

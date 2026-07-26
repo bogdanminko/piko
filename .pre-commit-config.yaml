@@ -1,0 +1,63 @@
+# Fast hygiene + the full quality gate (mypy/pytest/swift are scoped by
+# `files:` so unrelated commits stay fast).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=2048]  # video project: keep .mp4/.mov/models out of git
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: check-json
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        files: ^(src/|tests/).*\.py$|^pyproject\.toml$
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest -q
+        language: system
+        pass_filenames: false
+        files: ^(src/|tests/)|^Piko/Models/BackendMessage\.swift$
+
+      - id: swiftlint
+        name: swiftlint
+        # XCODE_DEFAULT_TOOLCHAIN_OVERRIDE: SourceKit lookup on CLT-only
+        # machines (no Xcode); harmless when Xcode is installed.
+        entry: env XCODE_DEFAULT_TOOLCHAIN_OVERRIDE=/Library/Developer/CommandLineTools swiftlint --strict --quiet
+        language: system
+        pass_filenames: false
+        files: \.swift$
+
+      - id: swift-build
+        name: swift build
+        entry: swift build
+        language: system
+        pass_filenames: false
+        files: \.swift$

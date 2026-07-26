@@ -28,8 +28,7 @@ def render_emoji(emoji: str, cache_dir: str | Path) -> Path:
 
     font = ImageFont.truetype(EMOJI_FONT, STRIKE_SIZE)
     pad = 10
-    img = Image.new("RGBA", (STRIKE_SIZE + pad * 2, STRIKE_SIZE + pad * 2),
-                    (0, 0, 0, 0))
+    img = Image.new("RGBA", (STRIKE_SIZE + pad * 2, STRIKE_SIZE + pad * 2), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
     draw.text((pad, pad), emoji, font=font, embedded_color=True)
 

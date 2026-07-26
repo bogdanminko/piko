@@ -11,4 +11,4 @@ import json
 
 def emit(msg: dict) -> None:
     """Write one JSON message to stdout (for SwiftUI to read)."""
-    print(json.dumps(msg, ensure_ascii=False), flush=True)
+    print(json.dumps(msg, ensure_ascii=False), flush=True)  # noqa: T201 — the protocol itself

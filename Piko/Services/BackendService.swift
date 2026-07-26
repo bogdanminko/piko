@@ -23,7 +23,7 @@ actor BackendService {
         //    far away from the repo.
         let candidates = [
             Bundle.main.bundleURL,
-            URL(fileURLWithPath: #filePath),
+            URL(fileURLWithPath: #filePath)
         ]
         for start in candidates {
             var dir = start

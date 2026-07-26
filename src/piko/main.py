@@ -30,8 +30,7 @@ def main() -> None:
     if handler:
         handler(command.get("params", {}))
     else:
-        emit({"type": "error", "message": f"Unknown command: {cmd}",
-              "code": "UNKNOWN_COMMAND"})
+        emit({"type": "error", "message": f"Unknown command: {cmd}", "code": "UNKNOWN_COMMAND"})
 
 
 if __name__ == "__main__":
