@@ -1,5 +1,16 @@
 import Foundation
 
+enum BackendError: LocalizedError {
+    case bootstrapFailed(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .bootstrapFailed(let detail):
+            return "Python environment setup failed: \(detail)"
+        }
+    }
+}
+
 actor BackendService {
     private let projectRoot: URL
 
@@ -24,17 +35,62 @@ actor BackendService {
         self.projectRoot = projectRoot
     }
 
+    private var venvPython: URL {
+        projectRoot.appendingPathComponent(".venv/bin/python")
+    }
+
+    /// First launch: build the venv strictly from uv.lock (`uv sync --frozen`).
+    /// Every later launch uses .venv/bin/python directly, so uv never gets a
+    /// chance to re-resolve or update anything. Re-syncs only when uv.lock
+    /// changes (the stamp file holds the lock contents the venv was built from).
+    private func ensureEnvironment(_ yield: (BackendMessage) -> Void) throws {
+        let fm = FileManager.default
+        let lockURL = projectRoot.appendingPathComponent("uv.lock")
+        let stampURL = projectRoot.appendingPathComponent(".venv/piko-uv.lock.stamp")
+
+        if fm.isExecutableFile(atPath: venvPython.path),
+           let lockData = try? Data(contentsOf: lockURL),
+           let stampData = try? Data(contentsOf: stampURL),
+           lockData == stampData {
+            return
+        }
+
+        yield(BackendMessage(type: "progress", stage: "bootstrap", percent: 0,
+                             message: "Preparing Python environment (first launch)..."))
+
+        let uvURL = fm.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/uv")
+        let process = Process()
+        process.executableURL = uvURL
+        process.arguments = ["sync", "--frozen", "--project", projectRoot.path]
+        process.currentDirectoryURL = projectRoot
+        let stderrPipe = Pipe()
+        process.standardOutput = Pipe()
+        process.standardError = stderrPipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let data = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let stderr = String(data: data, encoding: .utf8) ?? "unknown error"
+            throw BackendError.bootstrapFailed(stderr)
+        }
+
+        if let lockData = try? Data(contentsOf: lockURL) {
+            try? lockData.write(to: stampURL)
+        }
+    }
+
     func execute(command: String, params: [String: Any]? = nil) -> AsyncStream<BackendMessage> {
         AsyncStream { continuation in
             Task {
                 do {
+                    try self.ensureEnvironment { continuation.yield($0) }
+
                     let process = Process()
-                    // Use the uv binary from ~/.local/bin
-                    let home = FileManager.default.homeDirectoryForCurrentUser
-                    let uvPath = home.appendingPathComponent(".local/bin/uv").path
-                    process.executableURL = URL(fileURLWithPath: uvPath)
-                    process.arguments = ["run", "--project", projectRoot.path, "python", "-m", "piko.main"]
-                    process.currentDirectoryURL = projectRoot
+                    process.executableURL = self.venvPython
+                    process.arguments = ["-m", "piko.main"]
+                    process.currentDirectoryURL = self.projectRoot
 
                     let stdinPipe = Pipe()
                     let stdoutPipe = Pipe()
@@ -78,24 +134,18 @@ actor BackendService {
                     if process.terminationStatus != 0 {
                         let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
                         let stderr = String(data: stderrData, encoding: .utf8) ?? "Unknown error"
-                        let errorMsg = BackendMessage(
-                            type: "error", stage: nil, percent: nil,
+                        continuation.yield(BackendMessage(
+                            type: "error",
                             message: "Process exited with code \(process.terminationStatus): \(stderr)",
-                            success: false, outputPath: nil, subtitlePath: nil,
-                            language: nil, wordCount: nil, keywordsFound: nil,
-                            models: nil, code: "PROCESS_ERROR", downloaded: nil, model: nil
-                        )
-                        continuation.yield(errorMsg)
+                            success: false, code: "PROCESS_ERROR"
+                        ))
                     }
                 } catch {
-                    let errorMsg = BackendMessage(
-                        type: "error", stage: nil, percent: nil,
+                    continuation.yield(BackendMessage(
+                        type: "error",
                         message: error.localizedDescription,
-                        success: false, outputPath: nil, subtitlePath: nil,
-                        language: nil, wordCount: nil, keywordsFound: nil,
-                        models: nil, code: "SWIFT_ERROR", downloaded: nil, model: nil
-                    )
-                    continuation.yield(errorMsg)
+                        success: false, code: "SWIFT_ERROR"
+                    ))
                 }
                 continuation.finish()
             }

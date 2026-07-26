@@ -31,7 +31,7 @@ open build/Piko.app
 swift build
 ```
 
-There is no linter configured. ffmpeg/ffprobe are hardcoded to `/opt/homebrew/bin/` (`src/piko/core/media.py`); the Swift side launches the backend via `~/.local/bin/uv run --project <root> python -m piko.main` (`Piko/Services/BackendService.swift`).
+ffmpeg/ffprobe are hardcoded to `/opt/homebrew/bin/` (`src/piko/core/media.py`). The Swift side (`Piko/Services/BackendService.swift`) bootstraps the backend venv once with `uv sync --frozen` (stamp file `.venv/piko-uv.lock.stamp` holds the uv.lock contents the venv was built from; it re-syncs only when uv.lock changes) and then always launches `<root>/.venv/bin/python -m piko.main` directly — deliberately not `uv run`, so uv can never re-resolve or update anything at app launch.
 
 All docs, code comments, and commit messages are in English (the project is open source).
 
