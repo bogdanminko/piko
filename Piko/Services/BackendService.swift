@@ -144,6 +144,15 @@ actor BackendService {
                     BackendProcessRegistry.shared.register(process)
                     defer { BackendProcessRegistry.shared.unregister(process) }
 
+                    // When the consumer stops listening — the user cancelled a
+                    // transcription — take the child down with it, instead of
+                    // leaving Whisper chewing through an hour-long file for
+                    // nobody. Fires on normal completion too, where the
+                    // process has already exited and this is a no-op.
+                    continuation.onTermination = { @Sendable _ in
+                        if process.isRunning { process.terminate() }
+                    }
+
                     // Build and write command JSON to stdin
                     var cmdDict: [String: Any] = ["command": command]
                     if let params = params {

@@ -25,6 +25,7 @@ import subprocess
 from collections.abc import Callable
 
 VM_STAT = "/usr/bin/vm_stat"
+SYSCTL = "/usr/sbin/sysctl"
 
 # Conservative peak RSS while transcribing (weights + activations + runtime),
 # not the download size from ASR_MODELS.
@@ -77,6 +78,25 @@ def available_memory_mb() -> int | None:
         return None
     available = parse_vm_stat(out)
     return None if available is None else available // (1024 * 1024)
+
+
+def total_memory_mb() -> int | None:
+    """Physical RAM installed in MB, or None if it cannot be determined.
+
+    Used to decide which model *tiers* to offer at all (a 20B tier makes no
+    sense on a 16 GB machine), which is a different question from
+    `available_memory_mb`'s "does this fit right now".
+    """
+    try:
+        out = subprocess.run(
+            [SYSCTL, "-n", "hw.memsize"], capture_output=True, text=True, check=True, timeout=5
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        return int(out.strip()) // (1024 * 1024)
+    except ValueError:
+        return None
 
 
 def estimate_transcribe_peak_mb(model: str, duration_s: float) -> int:

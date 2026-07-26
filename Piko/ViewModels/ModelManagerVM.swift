@@ -19,6 +19,8 @@ class ModelManagerVM {
     }
     var isDownloading: Bool = false
     var downloadMessage: String = ""
+    /// Model whose files are being removed right now.
+    var deletingModelId: String?
 
     private let backend = BackendService()
 
@@ -43,6 +45,34 @@ class ModelManagerVM {
                 }
             }
         }
+    }
+
+    /// Delete a model's files from the HuggingFace cache. The choice of model
+    /// is kept — a deleted model simply offers Download again.
+    func deleteModel(_ modelId: String) async {
+        await MainActor.run {
+            deletingModelId = modelId
+            downloadMessage = "Removing files..."
+        }
+
+        let params: [String: Any] = ["model": modelId]
+        for await message in await backend.execute(command: "delete_model", params: params) {
+            await MainActor.run {
+                switch message.type {
+                case "result" where message.success == true:
+                    if let index = models.firstIndex(where: { $0.id == modelId }) {
+                        models[index].downloaded = false
+                    }
+                    downloadMessage = message.message ?? ""
+                case "error":
+                    downloadMessage = message.message ?? "Could not remove the model"
+                default:
+                    break
+                }
+            }
+        }
+
+        await MainActor.run { deletingModelId = nil }
     }
 
     func downloadSelectedModel() async {

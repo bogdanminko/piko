@@ -1,25 +1,20 @@
 import SwiftUI
 
-/// Model management screen. The Transcription section is real and drives
-/// the same ModelManagerVM the pipeline uses; Summary and Alignment models
-/// and the active-models strip are design previews — those backends don't
-/// exist yet (see docs/PRODUCT.md).
+/// Model management screen. Transcription and Summary are both real and drive
+/// the view models the pipeline uses; the Alignment section is still a design
+/// preview — that backend does not exist yet (see docs/PRODUCT.md).
 struct ModelsView: View {
     @Bindable var modelManager: ModelManagerVM
+    @Bindable var summarizer: SummarizerVM
     @Environment(\.pikoTheme) private var theme
+    /// Model queued for deletion, pending confirmation.
+    @State private var modelToDelete: WhisperModel?
 
     private struct StubModel: Identifiable {
         let id: String
         let meta: String
     }
 
-    private let summaryStubs = [
-        StubModel(id: "qwen3.6-4b-instruct", meta: "4B parameters · 4-bit · ~2.3 GB on disk"),
-        StubModel(id: "qwen3.6-2b-instruct", meta: "2B parameters · 4-bit · ~1.2 GB on disk"),
-        StubModel(id: "gpt-oss-20b", meta: "20B parameters (MoE) · MXFP4 · ~12 GB on disk"),
-        StubModel(id: "piko-slm-4b", meta: "4B parameters · Piko's own SLM · in development"),
-        StubModel(id: "piko-slm-2b", meta: "2B parameters · Piko's own SLM · in development")
-    ]
     private let alignStubs = [
         StubModel(id: "piko-align-80m", meta: "80M parameters · FP16 · 160 MB on disk"),
         StubModel(id: "piko-align-320m", meta: "320M parameters · FP16 · 640 MB on disk")
@@ -37,13 +32,13 @@ struct ModelsView: View {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(spacing: 12) {
                         transcriptionSection
-                        stubSection(label: "Summary and decisions", note: "text → structure",
-                                    models: summaryStubs)
+                        SummarizerSection(summarizer: summarizer)
                         stubSection(label: "Caption timing", note: "word-level alignment",
                                     models: alignStubs)
                     }
                     VStack(spacing: 12) {
                         runtimeCard
+                        SamplingCard(summarizer: summarizer)
                         modelsFolderCard
                     }
                     .frame(width: 300)
@@ -51,6 +46,28 @@ struct ModelsView: View {
             }
         }
         .padding(EdgeInsets(top: 22, leading: 26, bottom: 22, trailing: 26))
+        .confirmationDialog(
+            "Remove \(modelToDelete?.name ?? "")?",
+            isPresented: Binding(get: { modelToDelete != nil },
+                                 set: { if !$0 { modelToDelete = nil } }),
+            presenting: modelToDelete
+        ) { model in
+            Button("Remove", role: .destructive) {
+                Task { await modelManager.deleteModel(model.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { model in
+            Text(deletionWarning(for: model))
+        }
+        // Refresh on entry: downloads and deletions change what is on disk.
+        .task { await summarizer.loadTiers() }
+    }
+
+    private func deletionWarning(for model: WhisperModel) -> String {
+        let freed = "Frees \(Self.formatMb(model.sizeMb)) on disk. You can download it again later."
+        return model.id == modelManager.selectedModelId
+            ? freed + " This is the model transcription currently uses."
+            : freed
     }
 
     private var diskUsedDescription: String {
@@ -58,7 +75,7 @@ struct ModelsView: View {
         return Self.formatMb(mb)
     }
 
-    private static func formatMb(_ mb: Int) -> String {
+    static func formatMb(_ mb: Int) -> String {
         mb >= 1000
             ? String(format: "%.1f GB", Double(mb) / 1000)
             : "\(mb) MB"
@@ -85,10 +102,12 @@ struct ModelsView: View {
                     modelRow(model)
                 }
 
-                if modelManager.isDownloading {
+                if modelManager.isDownloading || modelManager.deletingModelId != nil {
                     ProgressView()
                         .progressViewStyle(.linear)
                         .padding(.top, 10)
+                }
+                if !modelManager.downloadMessage.isEmpty {
                     Text(modelManager.downloadMessage)
                         .font(.system(size: 11))
                         .foregroundStyle(theme.dim)
@@ -128,15 +147,26 @@ struct ModelsView: View {
     @ViewBuilder
     private func actionButton(for model: WhisperModel, isActive: Bool) -> some View {
         if model.downloaded {
-            if isActive {
-                Text("Selected")
-                    .font(.system(size: 11.5))
-                    .foregroundStyle(theme.dim)
-                    .padding(.horizontal, 12)
-            } else {
-                Button("Use") { modelManager.selectedModelId = model.id }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
+            HStack(spacing: 8) {
+                if isActive {
+                    Text("Selected")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.dim)
+                } else {
+                    Button("Use") { modelManager.selectedModelId = model.id }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
+                Button {
+                    modelToDelete = model
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.dim)
+                }
+                .buttonStyle(.plain)
+                .disabled(modelManager.deletingModelId != nil || modelManager.isDownloading)
+                .help("Remove the downloaded files")
             }
         } else {
             Button("Download") {
@@ -213,12 +243,19 @@ struct ModelsView: View {
                         .font(.system(size: 13))
                         .foregroundStyle(theme.text)
                 }
-                Text("Apple silicon · unified memory")
-                    .font(.system(size: 10.5, design: .monospaced))
+                Text("Apple silicon · Whisper, Parakeet and the summarizer all on MLX")
+                    .font(.system(size: 10.5))
+                    .lineSpacing(2)
                     .foregroundStyle(theme.dim)
+                if let totalRamMb = summarizer.totalRamMb {
+                    Text("\(totalRamMb / 1024) GB unified memory")
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(theme.dim)
+                }
                 Rectangle().fill(theme.line).frame(height: 1)
-                Text("Each command runs as a short-lived process — models load for the "
-                     + "duration of a run and memory is freed right after.")
+                Text("Models load once per run and stay resident for it, so a summary "
+                     + "does not reload weights for every chunk. Memory is freed when "
+                     + "the run ends.")
                     .font(.system(size: 11))
                     .lineSpacing(2)
                     .foregroundStyle(theme.dim)

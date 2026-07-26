@@ -36,7 +36,8 @@ struct LibraryView: View {
         GridItem(.fixed(120), alignment: .leading),
         GridItem(.fixed(70), alignment: .leading),
         GridItem(.fixed(120), alignment: .leading),
-        GridItem(.fixed(100), alignment: .leading)
+        GridItem(.fixed(100), alignment: .leading),
+        GridItem(.fixed(22), alignment: .center)
     ]
 
     var body: some View {
@@ -85,7 +86,7 @@ struct LibraryView: View {
             Spacer(minLength: 0)
         }
         .padding(EdgeInsets(top: 26, leading: 24, bottom: 26, trailing: 24))
-        .background(theme.card, in: RoundedRectangle(cornerRadius: 10))
+        .cardSurface(theme)
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 1, dash: [5]))
@@ -96,7 +97,7 @@ struct LibraryView: View {
         let hasHistory = !history.entries.isEmpty
         return VStack(alignment: .leading, spacing: 7) {
             LazyVGrid(columns: columns, spacing: 0) {
-                ForEach(["Artifact", "Kind", hasHistory ? "Words" : "Length", "Added", "Status"],
+                ForEach(["Artifact", "Kind", hasHistory ? "Words" : "Length", "Added", "Status", ""],
                         id: \.self) {
                     SectionLabel(text: $0)
                 }
@@ -121,14 +122,7 @@ struct LibraryView: View {
     private var historyTable: some View {
         VStack(spacing: 0) {
             ForEach(history.entries) { entry in
-                Button {
-                    openEntry(entry)
-                } label: {
-                    historyRow(entry)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!entry.fileExists)
+                historyRow(entry)
                 if entry.id != history.entries.last?.id {
                     Rectangle().fill(theme.line).frame(height: 1)
                 }
@@ -136,9 +130,11 @@ struct LibraryView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
-        .background(theme.card, in: RoundedRectangle(cornerRadius: 10))
+        .cardSurface(theme)
     }
 
+    /// A tap anywhere in the row opens the entry; the trailing "..." menu
+    /// intercepts its own taps first, so it never triggers the row's open.
     private func historyRow(_ entry: HistoryEntry) -> some View {
         LazyVGrid(columns: columns, spacing: 0) {
             HStack(spacing: 10) {
@@ -164,8 +160,35 @@ struct LibraryView: View {
                 .background(theme.card2, in: RoundedRectangle(cornerRadius: 5))
                 .foregroundStyle(theme.positive)
                 .lineLimit(1)
+            entryMenu(entry)
         }
         .padding(.vertical, 11)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard entry.fileExists else { return }
+            openEntry(entry)
+        }
+    }
+
+    /// Borderless "..." menu. Removing only drops the history entry — the
+    /// source video file is untouched, so it works for missing files too.
+    private func entryMenu(_ entry: HistoryEntry) -> some View {
+        Menu {
+            Button(role: .destructive) {
+                history.remove(entry)
+            } label: {
+                Label("Remove from Library", systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 12))
+                .foregroundStyle(theme.dim)
+                .frame(width: 20, height: 20)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     /// Reopen a processed video on the Captions screen. Clicking the entry
@@ -188,7 +211,7 @@ struct LibraryView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
-        .background(theme.card, in: RoundedRectangle(cornerRadius: 10))
+        .cardSurface(theme)
         .opacity(0.55)
     }
 
@@ -212,6 +235,7 @@ struct LibraryView: View {
                 .padding(.vertical, 2)
                 .background(theme.card2, in: RoundedRectangle(cornerRadius: 5))
                 .foregroundStyle(theme.positive)
+            Color.clear
         }
         .padding(.vertical, 11)
     }

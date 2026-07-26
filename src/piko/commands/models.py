@@ -58,10 +58,13 @@ def handle_list_models(params: dict) -> None:
 
 
 def handle_download_model(params: dict) -> None:
-    """Download a Whisper model from HuggingFace."""
-    from huggingface_hub import snapshot_download
+    """Download a transcription model from HuggingFace, reporting bytes and speed."""
+    from ..core.downloads import Progress, download_model, format_bytes
 
     model_id = params["model"]
+    # ASR_MODELS is a list of plain dicts, so the size needs narrowing.
+    sizes = [m["size_mb"] for m in ASR_MODELS if m["id"] == model_id]
+    expected = sizes[0] if sizes and isinstance(sizes[0], int) else 0
     emit(
         {
             "type": "progress",
@@ -71,8 +74,26 @@ def handle_download_model(params: dict) -> None:
         }
     )
 
+    def on_progress(progress: Progress) -> None:
+        emit(
+            {
+                "type": "progress",
+                "stage": "verifying" if progress.finalizing else "downloading",
+                "percent": round(progress.percent, 1),
+                "message": (
+                    f"Verifying {format_bytes(progress.downloaded)}..."
+                    if progress.finalizing
+                    else f"{format_bytes(progress.downloaded)} of "
+                    f"{expected / 1000:.1f} GB · "
+                    f"{format_bytes(progress.bytes_per_second)}/s"
+                ),
+                "downloaded_bytes": progress.downloaded,
+                "bytes_per_second": round(progress.bytes_per_second),
+            }
+        )
+
     try:
-        path = snapshot_download(repo_id=model_id)
+        path = download_model(model_id, on_progress)
         emit(
             {
                 "type": "progress",
@@ -84,6 +105,52 @@ def handle_download_model(params: dict) -> None:
         emit({"type": "result", "success": True, "message": f"Model downloaded to {path}"})
     except Exception as e:
         emit({"type": "error", "message": str(e), "code": "DOWNLOAD_ERROR"})
+
+
+def handle_delete_model(params: dict) -> None:
+    """Delete a downloaded model's files from the HuggingFace cache.
+
+    Works for any repo id, not just the ASR list — the summarizer tiers live in
+    the same cache. Nothing else on the machine is touched: this removes the
+    revisions of one repo and reports how much that freed.
+    """
+    from huggingface_hub import scan_cache_dir
+
+    model_id = params["model"]
+    try:
+        cache_info = scan_cache_dir()
+        revisions = [
+            revision.commit_hash
+            for repo in cache_info.repos
+            if repo.repo_id == model_id
+            for revision in repo.revisions
+        ]
+        if not revisions:
+            emit(
+                {
+                    "type": "result",
+                    "success": True,
+                    "model": model_id,
+                    "downloaded": False,
+                    "message": "Model was not downloaded",
+                }
+            )
+            return
+
+        strategy = cache_info.delete_revisions(*revisions)
+        freed = strategy.expected_freed_size_str
+        strategy.execute()
+        emit(
+            {
+                "type": "result",
+                "success": True,
+                "model": model_id,
+                "downloaded": False,
+                "message": f"Removed {model_id} — freed {freed}",
+            }
+        )
+    except Exception as e:
+        emit({"type": "error", "message": str(e), "code": "DELETE_ERROR"})
 
 
 def handle_check_model(params: dict) -> None:

@@ -2,8 +2,8 @@ import AppKit
 import SwiftUI
 
 /// Color math shared by the custom-theme generator and by the "ported"
-/// built-in themes (Nocturne, Organic) that only specify a background/text/
-/// accent triad and need the rest of the token set derived.
+/// built-in themes (Nocturne, Organic, Modernist), which specify a
+/// background/text/accent triad and lean on `mix`/`pickAccentOn` for the rest.
 enum ThemeGenerator {
     /// WCAG relative luminance (0 = black, 1 = white) on linearized sRGB.
     static func relativeLuminance(_ color: Color) -> Double {
@@ -78,13 +78,16 @@ enum ThemeGenerator {
             line = text.opacity(0.11)
             positive = Color(hex: "A6E3A1") // Catppuccin Mocha green
         } else {
-            chrome = neutral(hue: hue, saturation: neutralSat, brightness: 0.91)
-            pane = neutral(hue: hue, saturation: neutralSat * 0.6, brightness: 0.96)
-            text = neutral(hue: hue, saturation: 0.14, brightness: 0.28)
-            dim = neutral(hue: hue, saturation: 0.10, brightness: 0.42)
-            card = mix(text, pane, 0.55).opacity(0.6)
-            card2 = mix(text, pane, 0.40).opacity(0.55)
-            line = text.opacity(0.18)
+            // Light themes invert the dark ladder: cards sit *above* the pane,
+            // so they get brighter, not darker. Deriving them from `text`
+            // (as this branch used to) turns every card into a gray wash.
+            chrome = neutral(hue: hue, saturation: neutralSat, brightness: 0.92)
+            pane = neutral(hue: hue, saturation: neutralSat * 0.55, brightness: 0.97)
+            text = neutral(hue: hue, saturation: 0.18, brightness: 0.18)
+            dim = neutral(hue: hue, saturation: 0.12, brightness: 0.40)
+            card = neutral(hue: hue, saturation: neutralSat * 0.3, brightness: 0.995)
+            card2 = neutral(hue: hue, saturation: neutralSat * 1.4, brightness: 0.89)
+            line = text.opacity(0.14)
             positive = Color(hex: "40A02B") // Catppuccin Latte green
         }
 

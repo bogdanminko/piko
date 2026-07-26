@@ -61,6 +61,13 @@ final class HistoryStore {
         save()
     }
 
+    /// Remove a single artifact from history (Library table / sidebar Recent).
+    /// Does not touch the source video file, only the recorded entry.
+    func remove(_ entry: HistoryEntry) {
+        entries.removeAll { $0.id == entry.id }
+        save()
+    }
+
     private func load() {
         guard let data = try? Data(contentsOf: Self.fileURL) else { return }
         entries = (try? JSONDecoder().decode([HistoryEntry].self, from: data)) ?? []

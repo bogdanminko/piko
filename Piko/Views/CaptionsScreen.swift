@@ -81,7 +81,7 @@ struct CaptionsScreen: View {
             }
             .padding(EdgeInsets(top: 14, leading: 14, bottom: 14, trailing: 14))
         }
-        .background(theme.card, in: RoundedRectangle(cornerRadius: 10))
+        .cardSurface(theme)
     }
 
     /// Cue-level QA (reading speed, line length) is designed but the
@@ -122,7 +122,7 @@ struct CaptionsDropZone: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(theme.card, in: RoundedRectangle(cornerRadius: 10))
+        .cardSurface(theme)
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 1, dash: [5]))

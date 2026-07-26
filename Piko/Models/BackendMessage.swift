@@ -35,6 +35,25 @@ struct BackendMessage: Decodable {
     let brollInserts: Int?
     /// Openly licensed candidates returned by search_broll.
     let clips: [BrollClip]?
+    /// Summarizer model tiers offered for this Mac (list_llm_tiers).
+    let tiers: [LLMTier]?
+    let totalRamMb: Int?
+    /// Tier the backend picks for this machine. The UI must not derive this:
+    /// the largest tier that fits is deliberately NOT the default.
+    let defaultTier: String?
+    /// Sampling sliders, described by the backend so Settings hardcodes no ranges.
+    let samplingControls: [SamplingControl]?
+    /// Languages the summary can be written in, including the automatic option.
+    let languages: [SummaryLanguage]?
+    /// Whether a summarizer model is resident, and whether it is loading.
+    let llm: LLMStatus?
+    /// The finished meeting summary (summarize_meeting).
+    let summary: MeetingSummary?
+    let summaryPath: String?
+    /// Live download figures, so a 12 GB fetch shows bytes and speed rather
+    /// than an indeterminate bar.
+    let downloadedBytes: Int?
+    let bytesPerSecond: Int?
 
     init(type: String, stage: String? = nil, percent: Double? = nil,
          message: String? = nil, success: Bool? = nil,
@@ -46,7 +65,14 @@ struct BackendMessage: Decodable {
          model: String? = nil, style: String? = nil,
          previews: [String: String]? = nil,
          processedSeconds: Double? = nil, totalSeconds: Double? = nil,
-         brollInserts: Int? = nil, clips: [BrollClip]? = nil) {
+         brollInserts: Int? = nil, clips: [BrollClip]? = nil,
+         tiers: [LLMTier]? = nil, totalRamMb: Int? = nil,
+         defaultTier: String? = nil,
+         samplingControls: [SamplingControl]? = nil,
+         languages: [SummaryLanguage]? = nil,
+         llm: LLMStatus? = nil,
+         summary: MeetingSummary? = nil, summaryPath: String? = nil,
+         downloadedBytes: Int? = nil, bytesPerSecond: Int? = nil) {
         self.type = type
         self.stage = stage
         self.percent = percent
@@ -69,6 +95,16 @@ struct BackendMessage: Decodable {
         self.totalSeconds = totalSeconds
         self.brollInserts = brollInserts
         self.clips = clips
+        self.tiers = tiers
+        self.totalRamMb = totalRamMb
+        self.defaultTier = defaultTier
+        self.samplingControls = samplingControls
+        self.languages = languages
+        self.llm = llm
+        self.summary = summary
+        self.summaryPath = summaryPath
+        self.downloadedBytes = downloadedBytes
+        self.bytesPerSecond = bytesPerSecond
     }
 
     enum CodingKeys: String, CodingKey {
@@ -83,7 +119,78 @@ struct BackendMessage: Decodable {
         case processedSeconds = "processed_seconds"
         case totalSeconds = "total_seconds"
         case brollInserts = "broll_inserts"
-        case clips
+        case clips, tiers, llm
+        case totalRamMb = "total_ram_mb"
+        case defaultTier = "default_tier"
+        case samplingControls = "sampling_controls"
+        case languages
+        case summary
+        case summaryPath = "summary_path"
+        case downloadedBytes = "downloaded_bytes"
+        case bytesPerSecond = "bytes_per_second"
+    }
+}
+
+/// A language the summary can be written in. An empty code means "same as the
+/// recording" — the default, so nothing has to be chosen before the first run.
+struct SummaryLanguage: Codable, Identifiable, Hashable {
+    let code: String
+    let name: String
+
+    var id: String { code }
+}
+
+/// One sampling slider, fully described by the backend (src/piko/core/llm/sampling.py)
+/// so the settings panel never hardcodes a range or a default.
+struct SamplingControl: Codable, Identifiable, Hashable {
+    let key: String
+    let label: String
+    let min: Double
+    let max: Double
+    let step: Double
+    let `default`: Double
+    /// Render as a whole number (top-k, max tokens) rather than a decimal.
+    let integer: Bool
+    let help: String
+
+    var id: String { key }
+}
+
+/// One summarizer model tier (list_llm_tiers). The UI picks a tier, never a
+/// repo id — the mapping lives in src/piko/core/llm/registry.py.
+struct LLMTier: Codable, Identifiable, Hashable {
+    let id: String
+    let tier: String
+    let name: String
+    let sizeMb: Int
+    let ramMb: Int
+    let contextTokens: Int
+    var downloaded: Bool
+    /// False when this Mac lacks the RAM: show it greyed with the requirement
+    /// rather than hiding it, so the limit is legible.
+    let available: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, tier, name, downloaded, available
+        case sizeMb = "size_mb"
+        case ramMb = "ram_mb"
+        case contextTokens = "context_tokens"
+    }
+}
+
+/// Whether the summarizer is resident, so the UI can show "warming up…".
+struct LLMStatus: Codable, Hashable {
+    let loaded: Bool
+    let loading: Bool
+    let modelKey: String?
+    let matchesRequest: Bool
+    let warmupError: String?
+
+    enum CodingKeys: String, CodingKey {
+        case loaded, loading
+        case modelKey = "model_key"
+        case matchesRequest = "matches_request"
+        case warmupError = "warmup_error"
     }
 }
 

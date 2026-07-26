@@ -7,8 +7,10 @@ struct MainView: View {
     @State private var appState = AppState()
     @State private var processor = VideoProcessorVM()
     @State private var modelManager = ModelManagerVM()
+    @State private var summarizer = SummarizerVM()
     @State private var stylePreviews = StylePreviewsVM()
     @State private var history = HistoryStore()
+    @State private var meeting = MeetingVM()
 
     var body: some View {
         let theme = appState.theme
@@ -44,7 +46,11 @@ struct MainView: View {
             }
             async let models: Void = modelManager.loadModels()
             async let previews: Void = stylePreviews.load()
-            _ = await (models, previews)
+            // Loaded at launch, not on the Models screen: the summary language
+            // picker is built from this list, and it lives on another screen
+            // the user may reach first.
+            async let tiers: Void = summarizer.loadTiers()
+            _ = await (models, previews, tiers)
         }
         // Any subtitle setting changed after a completed run (settings panel
         // or preview screen): fast re-render from the cached transcription —
@@ -87,7 +93,8 @@ struct MainView: View {
         case .library:
             LibraryView(appState: appState, processor: processor, history: history)
         case .summary:
-            MeetingSummaryView()
+            MeetingSummaryView(meeting: meeting, modelId: modelManager.selectedModelId,
+                               summarizer: summarizer)
         case .captions:
             CaptionsScreen(
                 appState: appState,
@@ -96,7 +103,7 @@ struct MainView: View {
                 stylePreviews: stylePreviews
             )
         case .models:
-            ModelsView(modelManager: modelManager)
+            ModelsView(modelManager: modelManager, summarizer: summarizer)
         case .appearance:
             AppearanceView(appState: appState)
         }

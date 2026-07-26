@@ -38,15 +38,45 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
-    <string>14.0</string>
+    <string>14.4</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Piko records your voice so meetings can be transcribed on this Mac.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Piko records what the other participants say so meetings can be transcribed on this Mac.</string>
 </dict>
 </plist>
 PLIST
 
-codesign --force --sign - "$APP"
+# TCC keys a permission grant to the app's designated requirement. An ad-hoc
+# signature has none, so every rebuild reads as a different app and macOS asks
+# for the microphone and system audio all over again. Prefer a stable identity
+# (./scripts/make-signing-cert.sh creates a local one).
+IDENTITY="${PIKO_SIGN_IDENTITY:-Piko Dev}"
+if security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
+    # Hardened Runtime denies the microphone unless the app claims it, whatever
+    # TCC says. Not sandboxed: the backend lives in the repo and shells out to
+    # ffmpeg and the venv's Python.
+    ENTITLEMENTS="build/piko.entitlements"
+    cat > "$ENTITLEMENTS" <<'ENT'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
+ENT
+    codesign --force --options runtime --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP"
+    echo "Signed with '$IDENTITY'"
+else
+    codesign --force --sign - "$APP"
+    echo "Signed ad-hoc — recording permissions will be requested again after every rebuild."
+    echo "Run ./scripts/make-signing-cert.sh once to keep them."
+fi
 
 echo "Built $APP"

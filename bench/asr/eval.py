@@ -38,6 +38,10 @@ MODELS = {
     "parakeet": ("parakeet-mlx", "mlx-community/parakeet-tdt-0.6b-v3"),
     "nemotron": ("mlx-audio", "mlx-community/nemotron-3.5-asr-streaming-0.6b"),
     "qwen3asr": ("mlx-audio", "mlx-community/Qwen3-ASR-0.6B-8bit"),
+    # torch (not MLX) — bench-only, see engines/eval_gigaam.py. ru/en/kk/ky/uz,
+    # so the de/fr slices of pikobench are expected to be garbage.
+    "gigaam": ("gigaam", "ai-sage/GigaAM-Multilingual@ctc"),
+    "gigaam-large": ("gigaam", "ai-sage/GigaAM-Multilingual@large_ctc"),
     # engine variants on identical weights — the engine comparison lives in the
     # same leaderboard as the model comparison
     "turbo@whisper.cpp": ("whisper-cpp", "GGML_MODEL"),
@@ -117,6 +121,16 @@ def run_cell(bench: str, model_key: str) -> None:
             engine,
             str(eval_dir),
             model_dir,
+            str(out),
+        ]
+    elif engine == "gigaam":
+        cmd = [
+            "uv",
+            "run",
+            "--script",
+            str(BENCH / "engines" / "eval_gigaam.py"),
+            str(eval_dir),
+            repo,
             str(out),
         ]
     elif engine == "mlx-audio-bf16":

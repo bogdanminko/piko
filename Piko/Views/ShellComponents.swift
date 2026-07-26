@@ -31,6 +31,17 @@ struct SectionLabel: View {
     }
 }
 
+extension View {
+    /// Card fill plus a hairline edge. Light themes need the outline: their
+    /// card sits only a few percent above the pane in luminance, so it is the
+    /// edge — not the fill — that makes the surface read as a card. On dark
+    /// themes the same hairline just sharpens an already-visible step.
+    func cardSurface(_ theme: ThemeTokens, radius: CGFloat = 10) -> some View {
+        background(theme.card, in: RoundedRectangle(cornerRadius: radius))
+            .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(theme.line, lineWidth: 1))
+    }
+}
+
 /// Rounded content card matching the mockup's `--card` fill.
 struct ThemedCard<Content: View>: View {
     @ViewBuilder var content: Content
@@ -40,7 +51,7 @@ struct ThemedCard<Content: View>: View {
         content
             .padding(EdgeInsets(top: 14, leading: 16, bottom: 14, trailing: 16))
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(theme.card, in: RoundedRectangle(cornerRadius: 10))
+            .cardSurface(theme)
     }
 }
 

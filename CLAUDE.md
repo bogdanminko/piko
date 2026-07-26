@@ -56,9 +56,13 @@ core/              # capabilities shared across skills
 commands/          # protocol handlers, one module per area
 ├── transcribe.py  # transcribe + on-disk transcription cache
 ├── render.py      # render / process (drives the captions skill)
+├── meeting.py     # finalize_recording / transcribe_meeting
 ├── previews.py    # style_previews
 └── models.py      # list/download/check Whisper models
 skills/
+├── meeting/       # recorded call → speaker-labelled transcript
+│   ├── audio.py      # raw tracks → m4a + mix, decode to samples
+│   └── speakers.py   # who spoke, by comparing track energy
 └── captions/      # first skill: the whole subtitle pipeline
     ├── generator.py        # generate_subtitles() — orchestrates the steps
     ├── keyword_detector.py # prosody-based emphasis detection
@@ -74,7 +78,7 @@ New skills (e.g. meeting summary) get their own `skills/<name>/` package and reu
 
 Each command = one short-lived Python process. Swift writes one JSON command to stdin; Python emits newline-delimited JSON messages (`progress` / `result` / `error` / `models`) to stdout. **stdout is protocol-only** — mlx-whisper's prints are redirected to stderr in `core/transcriber.py`; never `print()` to stdout in the backend. Message schema lives in `src/piko/commands/` (emit sites) and `Piko/Models/BackendMessage.swift` (one big optional-field struct; keep the two in sync + CodingKeys for snake_case).
 
-Commands: `process` (full pipeline, CLI convenience), `transcribe` (slow, cached), `render` (fast, repeatable), `style_previews`, `list_models`, `download_model`, `check_model`.
+Commands: `process` (full pipeline, CLI convenience), `transcribe` (slow, cached), `render` (fast, repeatable), `finalize_recording`, `import_recording`, `transcribe_meeting`, `style_previews`, `list_models`, `download_model`, `check_model`.
 
 ### Two-phase pipeline + caching
 
@@ -84,6 +88,58 @@ Transcription is decoupled from rendering so style/animation changes never re-ru
 2. `render` → takes `transcription_path` + style + word_mode + highlight_color, generates .ass, burns with ffmpeg (~sub-second for short clips).
 
 The Swift `VideoProcessorVM` additionally keeps a per-session render cache keyed by output path (which encodes style+mode+color), so switching back to an already-rendered combination swaps files instantly without calling the backend. The app never writes next to the user's video: renders and .ass files go to `~/Library/Caches/piko/renders/`, and the user exports explicitly via the Save Video… / Save Subtitles… buttons (NSSavePanel + copy). The sidebar's "Clear Cache" button wipes the whole `~/Library/Caches/piko` directory (style previews regenerate on the next `style_previews` call). The `piko_output/` default in `commands/render.py` only applies to CLI use without an explicit `output_path`.
+
+### Meeting recording (Swift capture → speaker-labelled transcript)
+
+The first half of the Meeting Summary vertical. Capture is entirely Swift
+(`Piko/Services/Recording/`), the backend takes over at Stop.
+
+**Two tracks, always.** The microphone (`MicrophoneCapture`, AVAudioEngine tap)
+and the system output (`SystemAudioTap`) are written to *separate* files. That
+is the whole trick behind speaker attribution: `skills/meeting/speakers.py`
+compares per-segment energy between the tracks instead of running diarization —
+"me" is the mic side, "them" is everything coming out of the call. It separates
+sides, not individual people, and that limit is deliberate.
+
+**System audio uses a Core Audio process tap**, not ScreenCaptureKit: a tap
+needs only the Audio Capture grant (`NSAudioCaptureUsageDescription`), while
+SCStream would demand full Screen Recording plus macOS 15's recurring
+re-approval nag. The shape Core Audio actually accepts: a global
+`CATapDescription` becomes a *sub-tap* of a private aggregate device whose main
+sub-device is the current default output, and an IOProc on that aggregate
+delivers the mixdown. Tap-only aggregates and AVAudioEngine-on-aggregate both
+fail *silently* (zero samples). The tap is bound to one output device, so
+`MeetingRecorder` rebuilds it when the default output changes mid-call.
+
+**On-disk shape** — `~/Library/Application Support/Piko/Recordings/<id>/`
+(user data: "Clear Cache" must never touch it). While recording:
+`mic.pcm` / `system.pcm`, raw 16 kHz mono s16le — header-less on purpose, so a
+crash leaves a fully readable file, and no encoder sits on the capture path.
+`RecordingSession` drains both ring buffers every 100 ms and pads silence
+against a wall clock, which is what keeps the two tracks sample-aligned.
+
+**After Stop**: `finalize_recording` mixes the raw tracks into `meeting.m4a`,
+encodes each side to `mic.m4a` / `system.m4a`, deletes the raw PCM and updates
+`meta.json`; `transcribe_meeting` transcribes the *mix only* (one Whisper pass,
+reusing `transcribe.transcribe_video` and its cache), then attributes each
+segment and writes `transcript.json`. Both are idempotent.
+
+**Import** (`import_recording`, button + drop target on the Recordings card)
+takes any file ffmpeg can decode — mp4, mov, mkv, m4a, mp3, wav, opus — and
+extracts *only its audio* into a meeting folder (`-vn`), so the original is
+never copied or modified and an hour of screen capture costs a few megabytes.
+From there it is an ordinary meeting, minus the side tracks: attribution has
+nothing to compare, so every segment is labelled `unknown` / "Speaker" instead
+of a guessed "You".
+
+`transcript.json` (`{version, language, duration, speakers, segments[]}` with
+`start`/`end`/`speaker`/`text`/`speaker_confidence`) is the seam the
+summarization step consumes — it should read that file, not the audio.
+
+**Permissions** live in `RecordingPermissions`. Microphone has a real API;
+system audio has none — a tap without the grant "succeeds" and returns silence
+forever, so the check is empirical: start a tap, play a short sound, see if the
+tap heard it. That same first tap creation is what raises the macOS dialog.
 
 ### Captions skill (`src/piko/skills/captions/`)
 
@@ -137,5 +193,7 @@ drop manually downloaded clips into the folders instead.
 - **SPM + AVKit**: `Package.swift` must keep `.linkedFramework("AVKit")`. SPM autolinks only the `_AVKit_SwiftUI` overlay; without AVKit itself the app crashes at runtime (`getSuperclassMetadata` abort) the moment `VideoPlayer` appears.
 - **BackendService project-root discovery** walks up looking for `pyproject.toml` from the bundle path (covers `build/Piko.app` inside the repo) and from `#filePath` (covers bare-executable runs via Xcode/`swift run`, which build into DerivedData/`.build`). Both are dev-machine assumptions by design.
 - **Swift concurrency**: `swift build` treats some Swift-6 concurrency issues as warnings; don't mutate captured locals inside the `MainActor.run` closures in VM stream loops.
+- **TCC hates ad-hoc signatures**: a permission grant is keyed to the app's designated requirement, which `codesign --sign -` does not provide — every rebuild then looks like a new app and macOS re-asks for the microphone and system audio. `scripts/make-signing-cert.sh` creates a local "Piko Dev" identity once; `make-app.sh` uses it automatically and falls back to ad-hoc with a warning. Reset a grant while testing with `tccutil reset Microphone dev.bogdanminko.piko` (and `AudioCapture` / `SystemAudioCaptureRequests` for system audio).
+- **Deployment target is macOS 14.4** (`Package.swift` + `LSMinimumSystemVersion`), set by Core Audio process taps — the API lands in 14.2 but its permission prompt only behaves from 14.4.
 - After changing UI state flow, remember `MainView` re-renders on changes of `selectedStyle`, `wordMode`, `highlightColorHex` via `.onChange` → `reRender()` (only when state is `.done`).
 - Renaming/moving: project was renamed creit→piko in-place; if the venv or Swift `.build` cache misbehaves after a rename, delete `.venv`/`.build` and rebuild.

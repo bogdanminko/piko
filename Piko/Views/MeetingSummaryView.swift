@@ -1,33 +1,65 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// Design stub for the next vertical (see docs/PRODUCT.md). The backend is
-/// not implemented yet — this screen previews the planned layout with
-/// sample data so the shell design is complete.
+/// Meeting Summary screen. Recording and transcription are real: the recorder
+/// writes a microphone track and a system-audio track, and the backend turns
+/// them into a transcript where every line knows which side said it. The
+/// summary cards on the left are still a design preview.
 struct MeetingSummaryView: View {
+    @Bindable var meeting: MeetingVM
+    /// Whisper/Parakeet model chosen on the Models screen.
+    let modelId: String
+    /// Tier, sampling and summary language picked on the Models screen.
+    @Bindable var summarizer: SummarizerVM
+
+    private var summarizerParams: [String: Any] { summarizer.requestParams }
+
     @Environment(\.pikoTheme) private var theme
+    @State private var isImporterPresented = false
+    @State private var isDropTargeted = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             header
+            RecordingBar(
+                recorder: meeting.recorder,
+                permissions: meeting.permissions,
+                onToggle: { Task { await meeting.toggleRecording(model: modelId) } },
+                onPauseToggle: meeting.togglePause
+            )
             HStack(alignment: .top, spacing: 20) {
+                MeetingSummaryColumn(meeting: meeting,
+                                     summarizer: summarizer,
+                                     params: summarizerParams)
                 VStack(spacing: 12) {
-                    briefCard
-                    decisionsCard
-                    actionsCard
-                    questionsCard
+                    recordingsCard
+                    transcriptCard
                 }
-                transcriptCard
-                    .frame(width: 330)
+                .frame(width: 380)
             }
-            .opacity(0.55)
             Spacer(minLength: 0)
         }
         .padding(EdgeInsets(top: 22, leading: 26, bottom: 22, trailing: 26))
+        .onAppear { meeting.refresh() }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            // .data keeps the panel open to anything: the real compatibility
+            // list is whatever ffmpeg can decode, not what macOS has a UTType for.
+            allowedContentTypes: [.audiovisualContent, .audio, .movie, .data]
+        ) { result in
+            if case .success(let url) = result {
+                importFile(url)
+            }
+        }
+    }
+
+    private func importFile(_ url: URL) {
+        Task { await meeting.importFile(at: url, model: modelId) }
     }
 
     private var header: some View {
         ScreenHeader(title: "Meeting Summary",
-                     subtitle: "Sample preview · summaries you can verify against the recording") {
+                     subtitle: "Record a call, get a transcript you can verify") {
             HStack(spacing: 10) {
                 ComingSoonBadge()
                 Button("Export Markdown") {}
@@ -37,108 +69,133 @@ struct MeetingSummaryView: View {
         }
     }
 
-    private var briefCard: some View {
-        ThemedCard {
-            VStack(alignment: .leading, spacing: 8) {
-                SectionLabel(text: "Brief")
-                Text("Discussed the Meeting Summary beta timeline, runtime choice and the eval set. "
-                     + "Agreed to keep cloud sync out of v1: metrics first, model tuning second.")
-                    .font(.system(size: 13.5))
-                    .lineSpacing(3)
-                    .foregroundStyle(theme.text)
-                HStack(spacing: 5) {
-                    ForEach(["Meeting Summary", "Model Runtime", "Eval pipeline", "Release plan"],
-                            id: \.self) { topic in
-                        Text(topic)
-                            .font(.system(size: 11.5))
-                            .padding(.horizontal, 9)
-                            .padding(.vertical, 2)
-                            .background(theme.card2, in: RoundedRectangle(cornerRadius: 5))
-                            .foregroundStyle(theme.dim)
-                    }
-                }
-            }
-        }
-    }
+    // MARK: - Recordings
 
-    private var decisionsCard: some View {
+    private var recordingsCard: some View {
         ThemedCard {
             VStack(alignment: .leading, spacing: 9) {
-                SectionLabel(text: "Decisions")
-                decisionRow("12:40", "Meeting Summary beta ships August 15")
-                decisionRow("21:05", "MLX stays the default runtime, LM Studio becomes an option")
-                decisionRow("34:18", "No cloud sync in v1")
+                HStack(spacing: 8) {
+                    SectionLabel(text: "Recordings")
+                    Spacer()
+                    Text("\(meeting.recordings.count)")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.dim)
+                }
+                if meeting.recordings.isEmpty {
+                    Text("Nothing recorded yet. Press record before the call starts — "
+                         + "you and the other side are captured as separate tracks.")
+                        .font(.system(size: 11.5))
+                        .lineSpacing(2)
+                        .foregroundStyle(theme.dim)
+                } else {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            ForEach(meeting.recordings) { recording in
+                                recordingRow(recording)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 132)
+                }
+                dropZone
             }
         }
-    }
-
-    private func decisionRow(_ timecode: String, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Timecode(text: timecode)
-            Text(text)
-                .font(.system(size: 13.5))
-                .foregroundStyle(theme.text)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private var actionsCard: some View {
-        ThemedCard {
-            VStack(alignment: .leading, spacing: 0) {
-                SectionLabel(text: "Action items")
-                    .padding(.bottom, 6)
-                actionRow("Collect 30 meeting recordings for the eval set", who: "Anya",
-                          due: "by Aug 5", timecode: "27:11")
-                actionRow("Extract ModelRuntime into its own protocol", who: "Dima",
-                          due: "by Aug 1", timecode: "30:52")
-                actionRow("Run three models against groundedness", who: "Mark",
-                          due: "no due date", timecode: "44:03")
+        .dropDestination(for: URL.self) { urls, _ in
+            guard let url = urls.first, !meeting.isBusy, !meeting.recorder.isActive else {
+                return false
             }
-        }
+            importFile(url)
+            return true
+        } isTargeted: { isDropTargeted = $0 }
     }
 
-    private func actionRow(_ text: String, who: String, due: String, timecode: String) -> some View {
-        HStack(spacing: 11) {
-            RoundedRectangle(cornerRadius: 4)
-                .strokeBorder(theme.dim, lineWidth: 1.5)
-                .frame(width: 14, height: 14)
-            Text(text)
-                .font(.system(size: 13.5))
-                .foregroundStyle(theme.text)
-            Spacer(minLength: 8)
-            Text(who)
+    /// Drop target for existing files. Deliberately a full-width zone rather
+    /// than an icon button: dragging a call recording in is the common way to
+    /// use this, and clicking it still opens the file panel.
+    private var dropZone: some View {
+        let canImport = !meeting.isBusy && !meeting.recorder.isActive
+        return VStack(spacing: 4) {
+            Image(systemName: isDropTargeted ? "arrow.down.doc.fill" : "arrow.down.doc")
+                .font(.system(size: 15, weight: .light))
+                .foregroundStyle(isDropTargeted ? theme.accent : theme.dim)
+            Text(isDropTargeted ? "Drop to transcribe" : "Drop an audio or video file")
                 .font(.system(size: 11.5))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 2)
-                .background(theme.card2, in: RoundedRectangle(cornerRadius: 5))
-                .foregroundStyle(theme.text)
-            Text(due)
-                .font(.system(size: 11.5))
+                .foregroundStyle(isDropTargeted ? theme.accent : theme.text)
+            Text("or click to choose one")
+                .font(.system(size: 10.5))
                 .foregroundStyle(theme.dim)
-            Timecode(text: timecode)
         }
-        .padding(.vertical, 8)
-        .overlay(alignment: .top) { Rectangle().fill(theme.line).frame(height: 1) }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, meeting.recordings.isEmpty ? 20 : 13)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(isDropTargeted ? theme.accent.opacity(0.1) : Color.clear)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(
+                    isDropTargeted ? theme.accent : theme.line,
+                    style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                )
+        )
+        .contentShape(Rectangle())
+        .opacity(canImport ? 1 : 0.5)
+        .onTapGesture {
+            guard canImport else { return }
+            isImporterPresented = true
+        }
     }
 
-    private var questionsCard: some View {
-        ThemedCard {
-            VStack(alignment: .leading, spacing: 7) {
-                SectionLabel(text: "Open questions")
-                questionRow("Who owns the Hugging Face quantizations?", timecode: "46:30")
-                questionRow("Do we need JSON export in the first beta?", timecode: "49:12")
+    private func recordingRow(_ recording: MeetingRecording) -> some View {
+        let isSelected = meeting.selectedID == recording.id
+        return HStack(spacing: 8) {
+            Image(systemName: hasTranscript(recording) ? "text.alignleft" : "waveform")
+                .font(.system(size: 11))
+                .foregroundStyle(isSelected ? theme.accent : theme.dim)
+                .frame(width: 14)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(recording.title)
+                    .font(.system(size: 12.5))
+                    .foregroundStyle(theme.text)
+                    .lineLimit(1)
+                Text(sourcesText(recording))
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(theme.dim)
             }
+            Spacer(minLength: 6)
+            Timecode(text: Self.clockText(recording.duration))
+            Button {
+                meeting.delete(recording)
+            } label: {
+                Image(systemName: "trash")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(theme.dim)
+            }
+            .buttonStyle(.plain)
+            .help("Delete recording")
         }
+        .padding(.vertical, 7)
+        .padding(.horizontal, 6)
+        .background(isSelected ? theme.card2 : .clear, in: RoundedRectangle(cornerRadius: 6))
+        .contentShape(Rectangle())
+        .onTapGesture { meeting.select(recording) }
     }
 
-    private func questionRow(_ text: String, timecode: String) -> some View {
-        HStack(spacing: 8) {
-            Text(text)
-                .font(.system(size: 13.5))
-                .foregroundStyle(theme.text)
-            Timecode(text: timecode)
-        }
+    private func hasTranscript(_ recording: MeetingRecording) -> Bool {
+        FileManager.default.fileExists(atPath: MeetingLibrary.transcriptURL(for: recording.id).path)
     }
+
+    private func sourcesText(_ recording: MeetingRecording) -> String {
+        if let source = recording.sourceFile {
+            return "imported · \(URL(fileURLWithPath: source).lastPathComponent)"
+        }
+        var parts: [String] = []
+        if let mic = recording.micTrack { parts.append(mic.device) }
+        if recording.systemTrack != nil { parts.append("system audio") }
+        return parts.isEmpty ? "no tracks" : parts.joined(separator: " · ")
+    }
+
+    // MARK: - Transcript
 
     private var transcriptCard: some View {
         ThemedCard {
@@ -146,49 +203,105 @@ struct MeetingSummaryView: View {
                 HStack {
                     SectionLabel(text: "Transcript")
                     Spacer()
-                    Text("source")
-                        .font(.system(size: 11))
-                        .foregroundStyle(theme.dim)
+                    if let language = meeting.transcript?.language {
+                        Text(language)
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.dim)
+                    }
+                    if let recording = meeting.selected, meeting.transcript != nil {
+                        RerunButton(title: "Rerun", disabled: meeting.isBusy) {
+                            Task {
+                                await meeting.transcribe(recording, model: modelId, force: true)
+                            }
+                        }
+                    }
                 }
-                Text("Every item on the left links to its moment in the recording — "
-                     + "you can verify the summary without listening to the whole thing.")
-                    .font(.system(size: 11.5))
-                    .lineSpacing(2)
-                    .foregroundStyle(theme.dim)
-                VStack(alignment: .leading, spacing: 0) {
-                    transcriptRow("12:38", speaker: "Anya",
-                                  text: "Let's lock it in: the Meeting Summary beta is August fifteenth.")
-                    transcriptRow("12:44", speaker: "Dima",
-                                  text: "We'll make it if we don't start tuning before the eval pipeline.")
-                    transcriptRow("18:24", speaker: "Anya",
-                                  text: "It matters more that users can verify the summary than that it reads nicely.")
-                    transcriptRow("21:05", speaker: "Mark",
-                                  text: "MLX stays the default, LM Studio as an option for private servers.")
-                    transcriptRow("27:11", speaker: "Anya",
-                                  text: "I'll collect thirty recordings by August fifth.")
-                    transcriptRow("34:18", speaker: "Dima",
-                                  text: "Sync is a separate product, we're not dragging it into v1.")
-                }
+                transcriptContent
             }
         }
     }
 
-    private func transcriptRow(_ timecode: String, speaker: String, text: String) -> some View {
+    /// Only transcript-side work is reported here. A summary running is *not*
+    /// this card's business: the transcript it is reading stays on screen so it
+    /// can be scrolled while the summary is written.
+    @ViewBuilder
+    private var transcriptContent: some View {
+        if let progress = meeting.progress(for: .transcript) {
+            JobProgressRow(percent: progress.percent,
+                           message: progress.message,
+                           onStop: meeting.cancelWork)
+                .padding(.vertical, 6)
+        } else if let failure = meeting.failure(for: .transcript) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(failure)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let recording = meeting.selected {
+                    Button("Try again") {
+                        Task { await meeting.transcribe(recording, model: modelId) }
+                    }
+                    .buttonStyle(AccentButtonStyle())
+                }
+            }
+        } else if let transcript = meeting.transcript {
+            transcriptList(transcript)
+        } else if let recording = meeting.selected {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("This recording has no transcript yet.")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.dim)
+                Button("Transcribe") {
+                    Task { await meeting.transcribe(recording, model: modelId) }
+                }
+                .buttonStyle(AccentButtonStyle())
+                .disabled(meeting.isBusy)
+            }
+        } else {
+            Text("Every line will be tagged with who said it — your microphone track "
+                 + "versus the call's audio — so a summary can always be checked against the source.")
+                .font(.system(size: 11.5))
+                .lineSpacing(2)
+                .foregroundStyle(theme.dim)
+        }
+    }
+
+    private func transcriptList(_ transcript: MeetingTranscript) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(transcript.segments) { segment in
+                    transcriptRow(segment, speakers: transcript.speakers)
+                }
+            }
+        }
+        .frame(maxHeight: 320)
+    }
+
+    private func transcriptRow(_ segment: MeetingTranscript.Segment,
+                               speakers: [String: String]) -> some View {
         HStack(alignment: .top, spacing: 10) {
-            Timecode(text: timecode)
+            Timecode(text: Self.clockText(segment.start))
                 .frame(width: 38, alignment: .leading)
                 .padding(.top, 1)
             VStack(alignment: .leading, spacing: 1) {
-                Text(speaker)
+                Text(speakers[segment.speaker] ?? segment.speaker)
                     .font(.system(size: 11))
-                    .foregroundStyle(theme.dim)
-                Text(text)
+                    // The far side is the accent colour; my own voice and an
+                    // imported file's single speaker stay neutral.
+                    .foregroundStyle(segment.speaker == "them" ? theme.accent : theme.dim)
+                Text(segment.text)
                     .font(.system(size: 12.5))
                     .lineSpacing(2)
                     .foregroundStyle(theme.text)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 8)
         .overlay(alignment: .top) { Rectangle().fill(theme.line).frame(height: 1) }
+    }
+
+    private static func clockText(_ seconds: Double) -> String {
+        let total = Int(seconds)
+        return String(format: "%02d:%02d", total / 60, total % 60)
     }
 }

@@ -138,36 +138,63 @@ struct SidebarView: View {
             // "Loaded" state is deliberately quieter than the accent nav
             // pill — only one thing in the sidebar should read as active.
             ForEach(history.entries.prefix(4)) { entry in
-                let isMissing = !entry.fileExists
-                let isActive = isOpen(entry)
-                Button {
-                    openEntry(entry)
-                } label: {
-                    HStack(spacing: 9) {
-                        VideoThumbView(path: entry.videoPath, cornerRadius: 3)
-                            .frame(width: 24, height: 15)
-                            .opacity(isMissing ? 0.4 : 1)
-                        Text(entry.title)
-                            .font(.system(size: 12.5))
-                            .foregroundStyle(isMissing ? theme.dim : theme.text)
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 0)
-                        if isActive {
-                            Circle().fill(theme.accent).frame(width: 5, height: 5)
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(isActive ? theme.card2 : Color.clear,
-                                in: RoundedRectangle(cornerRadius: 7))
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .disabled(isMissing)
-                .help(isMissing ? "File moved or deleted" : entry.videoPath)
+                recentRow(entry)
             }
         }
+    }
+
+    /// A tap anywhere in the row opens the entry; the trailing menu button
+    /// intercepts its own taps first, so it never triggers the row's open.
+    private func recentRow(_ entry: HistoryEntry) -> some View {
+        let isMissing = !entry.fileExists
+        let isActive = isOpen(entry)
+        return HStack(spacing: 9) {
+            VideoThumbView(path: entry.videoPath, cornerRadius: 3)
+                .frame(width: 24, height: 15)
+                .opacity(isMissing ? 0.4 : 1)
+            Text(entry.title)
+                .font(.system(size: 12.5))
+                .foregroundStyle(isMissing ? theme.dim : theme.text)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+            if isActive {
+                Circle().fill(theme.accent).frame(width: 5, height: 5)
+            }
+            entryMenu(entry, label: "Remove from Recent")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(isActive ? theme.card2 : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 7))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            guard !isMissing else { return }
+            openEntry(entry)
+        }
+        .help(isMissing ? "File moved or deleted" : entry.videoPath)
+    }
+
+    /// Borderless "..." menu shared by the sidebar row and (via LibraryView's
+    /// own copy) the Library table row. Removing only drops the history
+    /// entry — the source video file is untouched.
+    private func entryMenu(_ entry: HistoryEntry, label: String) -> some View {
+        Menu {
+            Button(role: .destructive) {
+                history.remove(entry)
+            } label: {
+                Label(label, systemImage: "trash")
+            }
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.dim)
+                .frame(width: 18, height: 18)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 
     /// Reopen a processed video on the Captions screen. Transcription is
@@ -220,7 +247,7 @@ struct SidebarView: View {
         }
         .padding(EdgeInsets(top: 9, leading: 10, bottom: 9, trailing: 10))
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.card, in: RoundedRectangle(cornerRadius: 8))
+        .cardSurface(theme, radius: 8)
     }
 
     // MARK: - Collapsed rail

@@ -7,7 +7,13 @@ requires-python = ">=3.13"
 dependencies = [
     "huggingface-hub>=1.27.0",
     "mlx-audio>=0.2.4",
+    # Explicit, not transitive via mlx-audio: core/llm's embedded backend is
+    # built on it, so its version is our concern.
+    "mlx-lm>=0.31.1",
     "mlx-whisper>=0.4.3",
+    # Only for the optional OpenAI-compatible provider (Ollama / LM Studio /
+    # OpenAI). Never imported unless that provider is selected.
+    "openai>=2.0",
     "pillow>=12.3.0",
     "pysubs2>=1.8.1",
 ]

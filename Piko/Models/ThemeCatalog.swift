@@ -165,14 +165,16 @@ extension ThemeTokens {
         )
     }()
 
+    /// Warm paper: cream page, near-white cards *above* it, terracotta ink.
+    /// The surfaces are hand-written rather than derived from `text` — a light
+    /// theme's card has to be lighter than its pane, and the generic mix
+    /// produced a mid-gray wash instead (see `ThemeGenerator.generate`).
     static let organic: ThemeTokens = {
-        let accent = Color(hex: "C67139") // Terracotta
-        let pane = Color(hex: "F5EAD8")
-        let text = Color(hex: "201E1D")
-        let chrome = Color(hex: "EDE0CB")
+        let accent = Color(hex: "A9502A") // Terracotta, dark enough to read as text
+        let pane = Color(hex: "F7EFE1")
+        let text = Color(hex: "23201C")
+        let chrome = Color(hex: "F0E6D3")
         let accentOn = ThemeGenerator.pickAccentOn(accent: accent, text: text, pane: pane, isDark: false)
-        let card = ThemeGenerator.mix(text, pane, 0.55).opacity(0.6)
-        let card2 = ThemeGenerator.mix(text, pane, 0.40).opacity(0.55)
         return ThemeTokens(
             id: "organic",
             displayName: "Organic",
@@ -181,26 +183,27 @@ extension ThemeTokens {
             isCustom: false,
             accentHex: HexColor(accent),
             accentOnHex: HexColor(accentOn),
-            positiveHex: HexColor("7A8A5E"), // Sage
+            positiveHex: HexColor("5E7245"), // Sage
             chromeHex: HexColor(chrome),
             paneHex: HexColor(pane),
-            cardHex: HexColor(card),
-            card2Hex: HexColor(card2),
+            cardHex: HexColor("FEFBF6"),
+            card2Hex: HexColor("E4D8C0"),
             textHex: HexColor(text),
-            dimHex: HexColor("6B6560"),
-            lineHex: HexColor(text.opacity(0.18)),
+            dimHex: HexColor("695E51"),
+            lineHex: HexColor(text.opacity(0.14)),
             previewGradientHex: [HexColor(chrome), HexColor(ThemeGenerator.mix(pane, accent, 0.35))]
         )
     }()
 
+    /// Swiss poster: paper-white cards on a warm-gray page, one loud red, and
+    /// rules that are meant to be seen — hence a heavier `line` than the rest
+    /// of the catalog uses.
     static let modernist: ThemeTokens = {
-        let accent = Color(hex: "EC3013")
-        let pane = Color(hex: "F3F2F2")
-        let text = Color(hex: "201E1D")
-        let chrome = Color(hex: "E8E6E5")
+        let accent = Color(hex: "CE2A10")
+        let pane = Color(hex: "F6F5F3")
+        let text = Color(hex: "1A1917")
+        let chrome = Color(hex: "EDEBE8")
         let accentOn = ThemeGenerator.pickAccentOn(accent: accent, text: text, pane: pane, isDark: false)
-        let card = ThemeGenerator.mix(text, pane, 0.55).opacity(0.6)
-        let card2 = ThemeGenerator.mix(text, pane, 0.40).opacity(0.55)
         return ThemeTokens(
             id: "modernist",
             displayName: "Modernist",
@@ -209,14 +212,14 @@ extension ThemeTokens {
             isCustom: false,
             accentHex: HexColor(accent),
             accentOnHex: HexColor(accentOn),
-            positiveHex: HexColor("40A02B"),
+            positiveHex: HexColor("2F7D32"),
             chromeHex: HexColor(chrome),
             paneHex: HexColor(pane),
-            cardHex: HexColor(card),
-            card2Hex: HexColor(card2),
+            cardHex: HexColor("FFFFFF"),
+            card2Hex: HexColor("E3E0DB"),
             textHex: HexColor(text),
-            dimHex: HexColor("6B6866"),
-            lineHex: HexColor(text.opacity(0.18)),
+            dimHex: HexColor("605D59"),
+            lineHex: HexColor(text.opacity(0.20)),
             previewGradientHex: [HexColor(chrome), HexColor(ThemeGenerator.mix(pane, accent, 0.35))]
         )
     }()

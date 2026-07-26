@@ -1,0 +1,45 @@
+{
+  "system": "You are a meeting summarizer. Read the transcript and produce a structured summary. Write the summary in the same language as the transcript. Be concise and factual: never invent decisions, owners or dates that are not stated in the transcript. Respond with a single JSON object and nothing else.",
+  "user_template": "Transcript:\n\n{transcript}\n\nSummarize this transcript as JSON.",
+  "max_tokens": 512,
+  "temperature": 0.0,
+  "seed": 0,
+  "schema": {
+    "type": "object",
+    "properties": {
+      "summary": {
+        "type": "string"
+      },
+      "topics": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "decisions": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "action_items": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "string"
+            }
+          },
+          "required": ["task", "owner"],
+          "additionalProperties": false
+        }
+      }
+    },
+    "required": ["summary", "topics", "decisions", "action_items"],
+    "additionalProperties": false
+  }
+}

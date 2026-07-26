@@ -5,3 +5,8 @@ useDefault = true
 paths = [
   '''^bench/''',
 ]
+# Reverse-DNS UserDefaults keys and bundle identifiers ("piko.summarizer.tier.v3")
+# look like high-entropy API keys to the generic-api-key rule.
+regexes = [
+  '''^(piko|dev\.bogdanminko\.piko)[a-zA-Z0-9._-]*$''',
+]

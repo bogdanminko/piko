@@ -29,13 +29,19 @@ def _transcription_cache_path(video_path: str, model: str, language: str | None)
     return CACHE_DIR / "transcriptions" / f"{digest}.json"
 
 
-def transcribe_video(video_path: str, model: str, language: str | None) -> dict:
+def transcribe_video(
+    video_path: str, model: str, language: str | None, force: bool = False
+) -> dict:
     """Transcribe a video, using the cache if available.
+
+    `force` re-runs the model and overwrites the cache entry — the escape hatch
+    for a transcript that came out wrong, since the cache key only covers the
+    file, the model and the language, not how well it went.
 
     Returns dict: {"language": ..., "segments": [...], "path": <cache file>}.
     """
     cache_path = _transcription_cache_path(video_path, model, language)
-    if cache_path.exists():
+    if cache_path.exists() and not force:
         data = json.loads(cache_path.read_text())
         data["path"] = str(cache_path)
         data["cached"] = True
@@ -108,7 +114,7 @@ def handle_transcribe(params: dict) -> None:
     language = params.get("language")
 
     try:
-        data = transcribe_video(video_path, model, language)
+        data = transcribe_video(video_path, model, language, force=bool(params.get("force")))
         emit(
             {
                 "type": "result",
