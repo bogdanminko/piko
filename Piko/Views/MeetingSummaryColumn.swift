@@ -12,14 +12,38 @@ struct MeetingSummaryColumn: View {
     let params: [String: Any]
 
     @Environment(\.pikoTheme) private var theme
+    /// Rows waiting on the review sheet. Nil while nothing is being sent.
+    @State private var sendRequest: SendRequest?
+
+    /// Wrapper so `.sheet(item:)` can carry a selection of rows and where they
+    /// are headed.
+    struct SendRequest: Identifiable {
+        let id = UUID()
+        let items: [ComposedItem]
+        let target: TaskExporter.Target
+    }
 
     var body: some View {
-        if let summary = meeting.summary, !summary.isEmpty {
+        if let summary = meeting.composed, !summary.isEmpty {
             VStack(alignment: .leading, spacing: 8) {
                 toolbar
                 ScrollView {
-                    MeetingSummaryCards(summary: summary)
-                        .padding(.bottom, 8)
+                    MeetingSummaryCards(
+                        summary: summary,
+                        meeting: meeting,
+                        onSend: { sendRequest = SendRequest(items: $0, target: $1) }
+                    )
+                    .padding(.bottom, 8)
+                }
+                .sheet(item: $sendRequest) { request in
+                    if let recording = meeting.selected {
+                        ExportReviewSheet(items: request.items,
+                                          recording: recording,
+                                          meeting: meeting,
+                                          initialTarget: request.target) { target, sent in
+                            record(sent, target: target, from: summary)
+                        }
+                    }
                 }
                 // A rerun keeps the old cards on screen underneath: they are
                 // still valid until the new ones land, and blanking them would
@@ -32,6 +56,19 @@ struct MeetingSummaryColumn: View {
             card { failed(failure) }
         } else {
             card { placeholder }
+        }
+    }
+
+    /// EventKit identifiers come back keyed by row id; each one is stored on
+    /// the row's edit so a second send updates that entry instead of cloning
+    /// it. Targets are tracked separately — a follow-up can legitimately be
+    /// both a task and an event.
+    private func record(_ identifiers: [String: String],
+                        target: TaskExporter.Target,
+                        from summary: ComposedSummary) {
+        for item in summary.actionItems {
+            guard let identifier = identifiers[item.id] else { continue }
+            meeting.recordExport(identifier, target: target.rawValue, for: item)
         }
     }
 
@@ -63,6 +100,10 @@ struct MeetingSummaryColumn: View {
                         .lineLimit(2)
                 }
                 Spacer()
+                if let summary = meeting.composed {
+                    CopyButton(text: { MarkdownExport.make(summary, for: recording) },
+                               help: "Copy the whole summary")
+                }
                 SummaryLanguagePicker(summarizer: summarizer, disabled: meeting.isBusy)
                 RerunButton(title: "Rerun summary", disabled: meeting.isBusy) {
                     Task { await meeting.summarize(recording, params: params, force: true) }

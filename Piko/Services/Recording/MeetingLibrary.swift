@@ -49,6 +49,35 @@ enum MeetingLibrary {
         return try? JSONDecoder().decode(MeetingSummary.self, from: data)
     }
 
+    /// The user's side of a summary — corrections, ticks, exports. Written by
+    /// the app only; the backend never reads or overwrites it.
+    static func editsURL(for id: String) -> URL {
+        folder(for: id).appendingPathComponent("summary.edits.json")
+    }
+
+    static func loadEdits(for recording: MeetingRecording) -> SummaryEdits {
+        guard let data = try? Data(contentsOf: editsURL(for: recording.id)) else {
+            return SummaryEdits()
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(SummaryEdits.self, from: data)) ?? SummaryEdits()
+    }
+
+    /// Atomic, and self-cleaning: an overlay with nothing left in it is removed
+    /// rather than left behind as an empty file.
+    static func saveEdits(_ edits: SummaryEdits, for id: String) throws {
+        let url = editsURL(for: id)
+        guard !edits.isEmpty else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(edits).write(to: url, options: .atomic)
+    }
+
     static func transcriptURL(for id: String) -> URL {
         folder(for: id).appendingPathComponent("transcript.json")
     }

@@ -135,16 +135,141 @@ struct PanelToggleButton: View {
 }
 
 /// Accent-filled primary button ("Export Markdown", "Render styled video").
+/// `compact` is the inline variant that sits inside a card header.
 struct AccentButtonStyle: ButtonStyle {
+    var compact = false
     @Environment(\.pikoTheme) private var theme
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(.system(size: 12, weight: .medium))
-            .padding(.horizontal, 13)
-            .padding(.vertical, 6)
+            .font(.system(size: compact ? 11 : 12, weight: .medium))
+            .padding(.horizontal, compact ? 10 : 13)
+            .padding(.vertical, compact ? 4 : 6)
             .background(theme.accent, in: RoundedRectangle(cornerRadius: 7))
             .foregroundStyle(theme.accentOn)
             .opacity(configuration.isPressed ? 0.8 : 1)
+    }
+}
+
+/// Quiet bordered button for secondary row actions ("+ Add item", "Restore").
+struct GhostButtonStyle: ButtonStyle {
+    @Environment(\.pikoTheme) private var theme
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 11))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .foregroundStyle(theme.dim)
+            .overlay(
+                RoundedRectangle(cornerRadius: 6).strokeBorder(theme.line, lineWidth: 1)
+            )
+            .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+
+/// Chips that wrap onto the next line instead of being clipped.
+struct FlowLayout: Layout {
+    var spacing: CGFloat = 5
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        var origin = CGPoint.zero
+        var lineHeight: CGFloat = 0
+        var total = CGSize.zero
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if origin.x + size.width > width, origin.x > 0 {
+                origin.x = 0
+                origin.y += lineHeight + spacing
+                lineHeight = 0
+            }
+            origin.x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+            total.width = max(total.width, origin.x - spacing)
+            total.height = origin.y + lineHeight
+        }
+        return total
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize,
+                       subviews: Subviews, cache: inout ()) {
+        var origin = bounds.origin
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if origin.x + size.width > bounds.maxX, origin.x > bounds.minX {
+                origin.x = bounds.minX
+                origin.y += lineHeight + spacing
+                lineHeight = 0
+            }
+            subview.place(at: origin, proposal: ProposedViewSize(size))
+            origin.x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+    }
+}
+
+/// Square icon button for actions that live inside a row — edit, save, cancel.
+/// Quiet until the pointer is on it: a list of items should not read as a list
+/// of buttons.
+struct RowIconButton: View {
+    let icon: String
+    let help: String
+    /// Nil keeps it neutral; an accent tint marks the affirmative one.
+    var tint: Color?
+    let action: () -> Void
+
+    @Environment(\.pikoTheme) private var theme
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 22, height: 22)
+                .foregroundStyle(tint ?? theme.dim)
+                .background(isHovered ? theme.card2 : .clear,
+                            in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .help(help)
+    }
+}
+
+/// The row's overflow menu, styled like `RowIconButton`.
+///
+/// Destructive actions live behind it rather than on the row: a bin you can
+/// hit while aiming for the pencil is a bin that will be hit, and an undo does
+/// not make that acceptable.
+struct RowMenuButton<Content: View>: View {
+    var icon = "ellipsis"
+    var help = "More"
+    @ViewBuilder var content: Content
+
+    @Environment(\.pikoTheme) private var theme
+    @State private var isHovered = false
+
+    var body: some View {
+        Menu {
+            content
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 11, weight: .medium))
+                .frame(width: 22, height: 22)
+                .foregroundStyle(theme.dim)
+                .background(isHovered ? theme.card2 : .clear,
+                            in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .onHover { isHovered = $0 }
+        .help(help)
     }
 }

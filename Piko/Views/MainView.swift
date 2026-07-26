@@ -52,6 +52,16 @@ struct MainView: View {
             async let tiers: Void = summarizer.loadTiers()
             _ = await (models, previews, tiers)
         }
+        // A task exported to Reminders carries `piko://meeting/<id>?t=…` — the
+        // link that keeps it verifiable after it has left the app. Following
+        // one opens that meeting; a seek needs the player, which the summary
+        // screen does not have yet.
+        .onOpenURL { url in
+            guard let link = PikoURL.parse(url), meeting.open(recordingID: link.recordingID) else {
+                return
+            }
+            appState.screen = .summary
+        }
         // Any subtitle setting changed after a completed run (settings panel
         // or preview screen): fast re-render from the cached transcription —
         // or an instant swap if that combination was already rendered.

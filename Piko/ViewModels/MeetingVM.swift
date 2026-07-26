@@ -33,7 +33,16 @@ final class MeetingVM {
     private(set) var selectedID: String?
     private(set) var transcript: MeetingTranscript?
     private(set) var summary: MeetingSummary?
+    /// The user's corrections and task state for the selected meeting. Kept in
+    /// its own file so a rerun of the summary can never overwrite them.
+    /// Mutated only through the methods in MeetingVM+Edits.swift.
+    var edits = SummaryEdits()
     private(set) var phase: Phase = .idle
+
+    /// What the screen shows: the generated summary with the overlay applied.
+    var composed: ComposedSummary? {
+        summary.map { ComposedSummary.make($0, edits: edits) }
+    }
 
     private let backend = BackendService()
     /// The import/transcription in flight, so it can be cancelled.
@@ -188,7 +197,19 @@ final class MeetingVM {
         selectedID = recording?.id
         transcript = recording.flatMap(MeetingLibrary.loadTranscript)
         summary = recording.flatMap(MeetingLibrary.loadSummary)
+        edits = recording.map(MeetingLibrary.loadEdits) ?? SummaryEdits()
         if case .failed = phase { phase = .idle }
+    }
+
+    /// Follow a `piko://meeting/<id>` link: rescan (the meeting may have been
+    /// recorded in another window) and select it. Unknown ids are ignored —
+    /// a link is not allowed to conjure a recording.
+    @discardableResult
+    func open(recordingID: String) -> Bool {
+        if !recordings.contains(where: { $0.id == recordingID }) { refresh() }
+        guard let match = recordings.first(where: { $0.id == recordingID }) else { return false }
+        select(match)
+        return true
     }
 
     func delete(_ recording: MeetingRecording) {

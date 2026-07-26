@@ -8,6 +8,10 @@ these need weights.
 
 from __future__ import annotations
 
+from collections.abc import Iterator, Sequence
+from typing import Any
+
+from piko.core.llm import GenerationChunk, LLMSession, Message, SamplingParams
 from piko.skills.meeting.summary import (
     Budgets,
     _clip,
@@ -19,6 +23,7 @@ from piko.skills.meeting.summary import (
     detect_language,
     language_name,
     numbered_lines,
+    resolve_due_dates,
 )
 
 SEGMENTS = [
@@ -199,3 +204,109 @@ def test_detection_declines_rather_than_guessing_on_thin_input():
     assert detect_language("") is None
     assert detect_language("12345 !!! ...") is None
     assert detect_language("ok") is None
+
+
+# --- due dates ------------------------------------------------------------
+#
+# The model is untrusted here too: a date is used only if it parses, sits on or
+# after the meeting, and lands inside the horizon. Anything else is dropped —
+# a task with no date beats a task due on an invented one.
+
+
+class FakeSession(LLMSession):
+    """Replays one canned answer and records whether it was called at all."""
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.description = "fake"
+        self.calls: list[dict[str, Any]] = []
+
+    def stream(
+        self,
+        messages: Sequence[Message],
+        *,
+        sampling: SamplingParams | None = None,
+        json_schema: dict[str, Any] | None = None,
+        stop: Sequence[str] | None = None,
+    ) -> Iterator[GenerationChunk]:
+        self.calls.append({"messages": list(messages)})
+        yield GenerationChunk(
+            text=self.text, prompt_tokens=7, generation_tokens=1, done=True, finish_reason="stop"
+        )
+
+    def close(self) -> None:
+        pass
+
+
+def _session(payload: str) -> FakeSession:
+    return FakeSession(payload)
+
+
+def test_spoken_deadline_becomes_a_date_and_keeps_the_phrase():
+    items = [{"text": "Collect the eval set", "start": 12.0, "due": "by the fifth of August"}]
+    resolve_due_dates(
+        _session('{"dates":[{"index":0,"date":"2026-08-05","time":null}]}'),
+        items,
+        "2026-07-26T18:01:00Z",
+    )
+
+    assert items[0]["due_date"] == "2026-08-05"
+    assert items[0]["due"] == "by the fifth of August", "the spoken phrase is the evidence"
+    assert "due_time" not in items[0]
+
+
+def test_stated_time_of_day_is_carried_over():
+    items = [{"text": "Send the deck", "start": 4.0, "due": "tomorrow at noon"}]
+    resolve_due_dates(
+        _session('{"dates":[{"index":0,"date":"2026-07-27","time":"12:00"}]}'), items, "2026-07-26"
+    )
+
+    assert (items[0]["due_date"], items[0]["due_time"]) == ("2026-07-27", "12:00")
+
+
+def test_a_date_before_the_meeting_is_refused():
+    """Almost always the model losing the anchor and answering from its own
+    idea of "today"."""
+    items = [{"text": "Ship it", "start": 1.0, "due": "by Friday"}]
+    resolve_due_dates(_session('{"dates":[{"index":0,"date":"2024-01-05"}]}'), items, "2026-07-26")
+
+    assert "due_date" not in items[0]
+
+
+def test_a_date_beyond_the_horizon_is_refused():
+    items = [{"text": "Ship it", "start": 1.0, "due": "by Friday"}]
+    resolve_due_dates(_session('{"dates":[{"index":0,"date":"2031-07-26"}]}'), items, "2026-07-26")
+
+    assert "due_date" not in items[0]
+
+
+def test_malformed_and_null_dates_are_dropped_not_guessed():
+    items = [
+        {"text": "One", "start": 1.0, "due": "later"},
+        {"text": "Two", "start": 2.0, "due": "soon"},
+    ]
+    resolve_due_dates(
+        _session('{"dates":[{"index":0,"date":null},{"index":1,"date":"next friday"}]}'),
+        items,
+        "2026-07-26",
+    )
+
+    assert all("due_date" not in item for item in items)
+
+
+def test_items_without_a_spoken_deadline_are_never_sent_to_the_model():
+    items = [{"text": "No deadline here", "start": 1.0}]
+    session = _session('{"dates":[{"index":0,"date":"2026-08-05"}]}')
+    resolve_due_dates(session, items, "2026-07-26")
+
+    assert session.calls == [], "nothing to resolve means no model call"
+    assert "due_date" not in items[0]
+
+
+def test_an_unusable_meeting_date_skips_resolution_entirely():
+    items = [{"text": "Ship it", "start": 1.0, "due": "by Friday"}]
+    session = _session('{"dates":[{"index":0,"date":"2026-08-05"}]}')
+    resolve_due_dates(session, items, "")
+
+    assert session.calls == []
+    assert "due_date" not in items[0]

@@ -57,15 +57,27 @@ struct MeetingSummaryView: View {
         Task { await meeting.importFile(at: url, model: modelId) }
     }
 
+    /// The only export control on the screen: one button, with Copy behind a
+    /// long-press menu rather than a second button competing with it.
     private var header: some View {
         ScreenHeader(title: "Meeting Summary",
-                     subtitle: "Record a call, get a transcript you can verify") {
-            HStack(spacing: 10) {
-                ComingSoonBadge()
-                Button("Export Markdown") {}
-                    .buttonStyle(AccentButtonStyle())
-                    .disabled(true)
-            }
+                     subtitle: "Record a call, get a summary you can verify") {
+            Button("Export Markdown") { exportMarkdown(save: true) }
+                .buttonStyle(AccentButtonStyle())
+                .disabled(meeting.composed?.isEmpty ?? true)
+                .contextMenu {
+                    Button("Copy as Markdown") { exportMarkdown(save: false) }
+                }
+        }
+    }
+
+    private func exportMarkdown(save: Bool) {
+        guard let summary = meeting.composed, let recording = meeting.selected else { return }
+        let text = MarkdownExport.make(summary, for: recording)
+        if save {
+            MarkdownExport.save(text, suggestedName: recording.title)
+        } else {
+            MarkdownExport.copy(text)
         }
     }
 
@@ -202,6 +214,10 @@ struct MeetingSummaryView: View {
             VStack(alignment: .leading, spacing: 11) {
                 HStack {
                     SectionLabel(text: "Transcript")
+                    if let transcript = meeting.transcript {
+                        CopyButton(text: { MarkdownExport.transcript(transcript) },
+                                   help: "Copy the transcript")
+                    }
                     Spacer()
                     if let language = meeting.transcript?.language {
                         Text(language)

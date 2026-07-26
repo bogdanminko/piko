@@ -1,0 +1,136 @@
+import AppKit
+import Foundation
+
+/// A summary as a Markdown document the user can keep anywhere.
+///
+/// Deliberately a snapshot, not a sync: Piko stays the source of truth, and the
+/// file it hands out carries `piko://` links so any line can be traced back to
+/// the recording. That is also why there is no Apple Notes integration — Notes
+/// has no public API, and a share sheet plus a linked snapshot does the same
+/// job without an AppleScript bridge that breaks.
+enum MarkdownExport {
+    static func make(_ summary: ComposedSummary, for recording: MeetingRecording) -> String {
+        var lines: [String] = ["# \(recording.title)", ""]
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        var meta = [formatter.string(from: recording.startedAt)]
+        if recording.duration > 0 {
+            meta.append(MeetingSummaryCards.clockText(recording.duration))
+        }
+        lines += [meta.joined(separator: " · "), ""]
+
+        if !summary.brief.isEmpty {
+            lines += [summary.brief, ""]
+        }
+        if !summary.topics.isEmpty {
+            lines += ["**Topics:** " + summary.topics.joined(separator: " · "), ""]
+        }
+        if !summary.summary.isEmpty {
+            lines += ["## Summary", "", summary.summary, ""]
+        }
+
+        if !summary.decisions.isEmpty {
+            lines += ["## Decisions", ""]
+            lines += summary.decisions.map { "- \($0.text)\(link($0, recording))" }
+            lines.append("")
+        }
+
+        if !summary.actionItems.isEmpty {
+            lines += ["## Action items", ""]
+            lines += summary.actionItems.map { item in
+                var line = "- [\(item.isDone ? "x" : " ")] \(item.text)"
+                if let owner = item.owner, !owner.isEmpty { line += " — \(owner)" }
+                if let due = DueDate.label(item.dueDate, time: item.dueTime) {
+                    line += " — due \(due)"
+                } else if let spoken = item.due, !spoken.isEmpty {
+                    line += " — due “\(spoken)”"
+                }
+                return line + link(item, recording)
+            }
+            lines.append("")
+        }
+
+        if !summary.openQuestions.isEmpty {
+            lines += ["## Open questions", ""]
+            lines += summary.openQuestions.map { "- \($0.text)\(link($0, recording))" }
+            lines.append("")
+        }
+
+        lines += ["---", "Summarized locally by Piko. Timecodes link back into the recording."]
+        return lines.joined(separator: "\n")
+    }
+
+    // MARK: - Pieces
+    //
+    // The same renderers the whole document is built from, so copying one card
+    // gives text that reads like the export rather than a second format that
+    // drifts from it.
+
+    static func brief(_ summary: ComposedSummary) -> String {
+        var lines = [summary.brief]
+        if !summary.topics.isEmpty {
+            lines += ["", "**Topics:** " + summary.topics.joined(separator: " · ")]
+        }
+        if !summary.summary.isEmpty {
+            lines += ["", summary.summary]
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// One card as a Markdown list. Action items keep their checkbox, owner and
+    /// deadline; the other two lists are plain bullets.
+    static func section(_ title: String, items: [ComposedItem],
+                        for recording: MeetingRecording, checkboxes: Bool = false) -> String {
+        var lines = ["## \(title)", ""]
+        lines += items.map { item in
+            var line = checkboxes ? "- [\(item.isDone ? "x" : " ")] \(item.text)" : "- \(item.text)"
+            if checkboxes {
+                if let owner = item.owner, !owner.isEmpty { line += " — \(owner)" }
+                if let due = DueDate.label(item.dueDate, time: item.dueTime) {
+                    line += " — due \(due)"
+                } else if let spoken = item.due, !spoken.isEmpty {
+                    line += " — due “\(spoken)”"
+                }
+            }
+            return line + link(item, recording)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// The transcript as it reads on screen: who said it, when, and what.
+    static func transcript(_ transcript: MeetingTranscript) -> String {
+        transcript.segments.map { segment in
+            let speaker = transcript.speakers[segment.speaker] ?? segment.speaker
+            return "[\(MeetingSummaryCards.clockText(segment.start))] \(speaker): \(segment.text)"
+        }
+        .joined(separator: "\n")
+    }
+
+    /// `[12:40](piko://meeting/<id>?t=760.0)` — the citation, clickable in any
+    /// Markdown reader on this Mac.
+    private static func link(_ item: ComposedItem, _ recording: MeetingRecording) -> String {
+        guard let start = item.start,
+              let url = PikoURL.make(recordingID: recording.id, at: start) else { return "" }
+        return " [\(MeetingSummaryCards.clockText(start))](\(url.absoluteString))"
+    }
+
+    /// Save panel → file. Returns false when the user cancelled.
+    @MainActor
+    @discardableResult
+    static func save(_ text: String, suggestedName: String) -> Bool {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName + ".md"
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return false }
+        try? text.data(using: .utf8)?.write(to: url, options: .atomic)
+        return true
+    }
+
+    @MainActor
+    static func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}

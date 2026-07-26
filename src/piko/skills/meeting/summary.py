@@ -19,6 +19,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 from ...core.llm import (
@@ -527,6 +528,120 @@ def _clip(text: str, limit: int) -> str:
     return (cut[: end + 1] if end > limit * 0.6 else cut.rstrip()) + "…"
 
 
+# --- due dates -------------------------------------------------------------
+#
+# "by Friday" is what someone said; a reminder needs 2026-07-31. The anchor is
+# the day the meeting was held, which the recording knows, so the resolution is
+# arithmetic on a known date rather than a guess about "now".
+
+DUE_SYSTEM = """\
+You convert spoken deadlines from a meeting into calendar dates.
+
+<rules>
+- <meeting_date> is the day the meeting was held. Resolve every phrase relative
+  to it: "tomorrow" is the day after it, "Friday" is the first Friday on or
+  after it.
+- Answer once per item, echoing its "index".
+- "date" is YYYY-MM-DD. Use null when the phrase names no resolvable day —
+  "later", "soon", "next sprint", "when the API is ready" all have no date.
+- "time" is HH:MM, 24-hour. Use null unless a time of day was actually stated.
+- Never answer with a date before <meeting_date>.
+</rules>
+
+<output>A single JSON object. No prose, no code fence.</output>"""
+
+DUE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "dates": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "index": {"type": "integer"},
+                    "date": {"type": ["string", "null"]},
+                    "time": {"type": ["string", "null"]},
+                },
+                "required": ["index", "date"],
+            },
+        }
+    },
+    "required": ["dates"],
+}
+
+_ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_CLOCK = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+# A deadline more than a year past the meeting is a model losing the anchor
+# (typically answering with its training-time "today"), not a real commitment.
+DUE_HORIZON_DAYS = 366
+
+
+def resolve_due_dates(
+    session: LLMSession,
+    items: Sequence[dict],
+    meeting_date: str,
+    *,
+    language: str = "English",
+) -> None:
+    """Fill `due_date` / `due_time` on the items that state a deadline.
+
+    Mutates `items` in place, and only ever *adds* keys: the spoken phrase in
+    `due` stays untouched, because it is the evidence the UI shows next to the
+    resolved date. Anything that does not parse, lands before the meeting or
+    beyond the horizon is dropped — the same null-over-guess rule that keeps
+    timecodes honest. Never raises: a summary without dates is still a summary.
+    """
+    try:
+        anchor = date.fromisoformat(meeting_date[:10])
+    except (TypeError, ValueError):
+        return
+
+    pending = [(index, item) for index, item in enumerate(items) if item.get("due")]
+    if not pending:
+        return
+
+    listing = "\n".join(f'[{index}] "{item["due"]}"' for index, item in pending)
+    message = (
+        f"<meeting_date>{anchor.isoformat()} ({anchor.strftime('%A')})</meeting_date>\n"
+        f"<language>{language}</language>\n<deadlines>\n{listing}\n</deadlines>"
+    )
+
+    try:
+        answer = session.generate_json(
+            [
+                {"role": "system", "content": DUE_SYSTEM},
+                {"role": "user", "content": message},
+            ],
+            DUE_SCHEMA,
+            sampling=SamplingParams(max_tokens=60 + 40 * len(pending)),
+            retries=0,
+        )
+    except StructuredOutputError:
+        return
+
+    known = dict(pending)
+    horizon = anchor + timedelta(days=DUE_HORIZON_DAYS)
+    for entry in answer.get("dates", []):
+        index = entry.get("index")
+        item = known.get(index) if isinstance(index, int) else None
+        if item is None:
+            continue
+        raw = entry.get("date")
+        if not isinstance(raw, str) or not _ISO_DATE.match(raw.strip()):
+            continue
+        try:
+            resolved = date.fromisoformat(raw.strip())
+        except ValueError:
+            continue
+        if resolved < anchor or resolved > horizon:
+            continue
+        item["due_date"] = resolved.isoformat()
+        clock = entry.get("time")
+        if isinstance(clock, str) and _CLOCK.match(clock.strip()):
+            item["due_time"] = clock.strip()
+
+
 def summarize(
     session: LLMSession,
     segments: Sequence[dict],
@@ -534,6 +649,7 @@ def summarize(
     speakers: dict[str, str] | None = None,
     language: str | None = None,
     output_language: str | None = None,
+    meeting_date: str | None = None,
     budgets: Budgets = DEFAULT_BUDGETS,
     on_progress: Callable[[str, float], None] | None = None,
 ) -> dict:
@@ -633,10 +749,16 @@ def summarize(
             pass  # keep the long version; truncation below still makes it fit
 
     report("summarizing", 96)
-    result = {
+    result: dict[str, Any] = {
         "brief": str(merged.get("brief", "")).strip(),
         "summary": str(merged.get("summary", "")).strip(),
         "topics": [str(topic).strip() for topic in merged.get("topics", []) if str(topic).strip()],
         **{field: _resolve(merged.get(field, []), starts, labels) for field in _LIST_FIELDS},
     }
-    return _truncate(result, budgets)
+    result = _truncate(result, budgets)
+
+    # After truncation: only the items that survive are worth a model call.
+    if meeting_date:
+        report("dating", 98)
+        resolve_due_dates(session, result["action_items"], meeting_date, language=target_language)
+    return result

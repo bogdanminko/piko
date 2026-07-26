@@ -17,17 +17,9 @@ struct MeetingSummary: Codable, Hashable {
     let openQuestions: [Item]
     let language: String?
 
-    /// One cited claim. `owner` and `due` are only ever set for action items,
-    /// and only when someone actually said them.
-    struct Item: Codable, Hashable, Identifiable {
-        let text: String
-        let start: Double
-        let owner: String?
-        let due: String?
-
-        /// Stable within a summary: no two items share a position and a text.
-        var id: String { "\(start)-\(text)" }
-    }
+    /// Spelled `MeetingSummary.Item` everywhere; declared at file scope so its
+    /// own CodingKeys stay one level of nesting deep.
+    typealias Item = MeetingSummaryItem
 
     enum CodingKeys: String, CodingKey {
         case brief, summary, topics, decisions, language
@@ -37,5 +29,29 @@ struct MeetingSummary: Codable, Hashable {
 
     var isEmpty: Bool {
         brief.isEmpty && decisions.isEmpty && actionItems.isEmpty && openQuestions.isEmpty
+    }
+}
+
+/// One cited claim. `owner` and `due` are only ever set for action items, and
+/// only when someone actually said them.
+struct MeetingSummaryItem: Codable, Hashable, Identifiable {
+    let text: String
+    let start: Double
+    let owner: String?
+    /// The deadline as it was spoken ("by Friday"). Evidence, not a date.
+    let due: String?
+    /// That phrase resolved against the day of the meeting, "yyyy-MM-dd".
+    /// Absent whenever the backend could not resolve it with confidence —
+    /// see resolve_due_dates in src/piko/skills/meeting/summary.py.
+    let dueDate: String?
+    let dueTime: String?
+
+    /// Stable within a summary: no two items share a position and a text.
+    var id: String { "\(start)-\(text)" }
+
+    enum CodingKeys: String, CodingKey {
+        case text, start, owner, due
+        case dueDate = "due_date"
+        case dueTime = "due_time"
     }
 }

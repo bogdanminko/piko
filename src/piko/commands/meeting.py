@@ -31,6 +31,7 @@ _SUMMARY_STAGES = {
     "extracting": "Reading through the transcript...",
     "summarizing": "Writing the summary...",
     "shortening": "Tightening it up...",
+    "dating": "Working out the deadlines...",
 }
 
 MIXED_FILE = "meeting.m4a"
@@ -44,6 +45,14 @@ def _load_meta(folder: Path) -> dict:
         raise FileNotFoundError(f"No meta.json in {folder}")
     meta: dict = json.loads(meta_path.read_text())
     return meta
+
+
+def _started_at(folder: Path) -> str:
+    """When the meeting was recorded, or "" — the date anchor is optional."""
+    try:
+        return str(_load_meta(folder).get("started_at", ""))
+    except (OSError, ValueError):
+        return ""
 
 
 def _save_meta(folder: Path, meta: dict) -> None:
@@ -268,12 +277,18 @@ def handle_summarize_meeting(params: dict) -> None:
                 }
             )
 
+        # The day of the meeting is the anchor spoken deadlines resolve against
+        # ("by Friday" → a real date). It comes from the recording itself, not
+        # from today's date: a call summarized a week later must not shift.
+        meeting_date = params.get("meeting_date") or _started_at(folder)
+
         summary = summarize(
             session,
             transcript.get("segments", []),
             speakers=transcript.get("speakers"),
             language=transcript.get("language"),
             output_language=params.get("output_language"),
+            meeting_date=meeting_date or None,
             on_progress=on_progress,
         )
         summary["language"] = transcript.get("language", "unknown")

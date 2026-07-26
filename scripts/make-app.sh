@@ -47,6 +47,21 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <string>Piko records your voice so meetings can be transcribed on this Mac.</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>Piko records what the other participants say so meetings can be transcribed on this Mac.</string>
+    <key>NSRemindersFullAccessUsageDescription</key>
+    <string>Piko turns a meeting's action items into reminders, each linking back to the moment it was agreed on.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key>
+    <string>Piko puts follow-ups agreed in a meeting on the day they were set for, each linking back to the moment it was agreed on.</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>dev.bogdanminko.piko.link</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>piko</string>
+            </array>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST
@@ -57,8 +72,11 @@ PLIST
 # (./scripts/make-signing-cert.sh creates a local one).
 IDENTITY="${PIKO_SIGN_IDENTITY:-Piko Dev}"
 if security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
-    # Hardened Runtime denies the microphone unless the app claims it, whatever
-    # TCC says. Not sandboxed: the backend lives in the repo and shells out to
+    # Hardened Runtime denies a protected resource unless the app claims it,
+    # whatever TCC says — and it fails *silently*: no prompt, and the app never
+    # even appears in the Privacy pane. That is what an unentitled Calendar
+    # request looks like. Reminders needs no entitlement of its own; Calendar
+    # does. Not sandboxed: the backend lives in the repo and shells out to
     # ffmpeg and the venv's Python.
     ENTITLEMENTS="build/piko.entitlements"
     cat > "$ENTITLEMENTS" <<'ENT'
@@ -67,6 +85,8 @@ if security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
 <plist version="1.0">
 <dict>
     <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.personal-information.calendars</key>
     <true/>
 </dict>
 </plist>

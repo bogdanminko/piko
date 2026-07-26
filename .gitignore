@@ -10,3 +10,6 @@ __pycache__/
 
 # macOS
 .DS_Store
+
+# Xcode / SwiftPM per-user state (project builds with plain `swift build`)
+.swiftpm/

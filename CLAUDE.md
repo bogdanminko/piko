@@ -78,7 +78,7 @@ New skills (e.g. meeting summary) get their own `skills/<name>/` package and reu
 
 Each command = one short-lived Python process. Swift writes one JSON command to stdin; Python emits newline-delimited JSON messages (`progress` / `result` / `error` / `models`) to stdout. **stdout is protocol-only** — mlx-whisper's prints are redirected to stderr in `core/transcriber.py`; never `print()` to stdout in the backend. Message schema lives in `src/piko/commands/` (emit sites) and `Piko/Models/BackendMessage.swift` (one big optional-field struct; keep the two in sync + CodingKeys for snake_case).
 
-Commands: `process` (full pipeline, CLI convenience), `transcribe` (slow, cached), `render` (fast, repeatable), `finalize_recording`, `import_recording`, `transcribe_meeting`, `style_previews`, `list_models`, `download_model`, `check_model`.
+Commands: `process` (full pipeline, CLI convenience), `transcribe` (slow, cached), `render` (fast, repeatable), `finalize_recording`, `import_recording`, `transcribe_meeting`, `summarize_meeting`, `style_previews`, `list_models`, `download_model`, `check_model`.
 
 ### Two-phase pipeline + caching
 
@@ -141,6 +141,91 @@ system audio has none — a tap without the grant "succeeds" and returns silence
 forever, so the check is empirical: start a tap, play a short sound, see if the
 tap heard it. That same first tap creation is what raises the macOS dialog.
 
+### Action items: edits overlay, Reminders, `piko://`
+
+`summarize_meeting` writes `summary.json` and may rewrite it on any rerun, so it
+stays strictly derived. Everything a person does to that summary — corrected
+wording, ticked boxes, deleted or hand-added items, where a task was exported —
+goes into **`summary.edits.json`** beside it (`Piko/Models/SummaryEdits.swift`,
+loaded by `MeetingLibrary`, mutated only through `MeetingVM+Edits.swift`). The
+screen renders `ComposedSummary.make(summary, edits:)`, the composition of the
+two; a rerun therefore cannot destroy an edit. Edits re-attach to regenerated
+items by anchor (same list, |Δstart| ≤ 15 s, ≥ 0.5 word overlap) — a rerun cites
+a neighbouring line, not a different minute. What does not re-attach becomes an
+`orphaned` row rather than being dropped: showing one stale row is recoverable,
+deleting text a person typed is not. `start` is the one field with no editor —
+a timecode is a citation, not a field.
+
+Deadlines are resolved to real dates in the backend (`resolve_due_dates`),
+anchored on the recording's own `started_at`, never on today. The spoken phrase
+stays in `due` as the evidence; `due_date` / `due_time` are the suggestion, and
+are absent whenever nothing resolved — the same null-over-guess rule as
+timecodes.
+
+Export is Swift-only: `TaskExporter` (EventKit → Reminders *or* Calendar) and
+`MarkdownExport`. Every exported entry carries `piko://meeting/<id>?t=<seconds>`
+in its URL field, and `MainView.onOpenURL` reopens that meeting — the
+verifiability promise does not stop at the window edge.
+
+EventKit rather than a cloud API is a product decision, not a shortcut: no key,
+no OAuth, no network, one system Allow — and it writes into whatever accounts
+the Mac already has, **including Google and Exchange calendars**. A Notion or
+Todoist integration would need a token and would send the meeting off the
+machine. The keyless ladder, in order of what it costs the user: Copy/Save
+Markdown (nothing) → `.ics` (nothing, not built yet) → EventKit (one Allow) →
+third-party URL schemes (app must be installed, not built yet) → cloud APIs
+(key + network — deliberately out).
+
+A calendar follow-up also inherits from the meeting it came from
+(`MeetingContext`): the recording's time window is matched against the user's
+events (≥50 % overlap, no all-day, no cancelled), and the winner's hour, length,
+conferencing link and participant list are carried onto the new entry — the link
+into `location`, where calendars render a Join button, the people into the note.
+Nothing is generated: `EKEvent.attendees` is read-only by design, so Piko lists
+who to invite and cannot invite for you, and it never mints a call link because
+that would need an account. Imported files are skipped — their `started_at` is
+the import time, not the call. The match is shown in the sheet with a switch,
+never applied silently: a wrong meeting would send everyone to the wrong room.
+
+Three destinations, because no single one fits everybody. **Reminders** and
+**Calendar** go through EventKit — updatable by identifier, but only reaching
+accounts the Mac is signed into. **Calendar file** (`CalendarFile`) writes an
+`.ics`: no permission, no account, read by Google/Outlook/Fantastical/Notion
+Calendar, and the only path that can carry `ATTENDEE` lines — an .ics *is* an
+invitation, so the guest list survives even though EventKit forbids writing
+attendees. Its trade-off is that nothing comes back, so a re-export writes a
+second file rather than updating (the stable `UID` at least lets a calendar
+recognise a re-import). `WebCalendarLink` is the fourth, zero-cost path for people
+whose calendar only exists in a browser tab: Google and Outlook (work and
+personal live on different hosts, so both are offered) open a prefilled compose
+screen where guests can be added in the UI that is allowed to invite them. Any
+other service is a `CustomCalendarLink` — the user pastes a link their calendar
+produced and `CalendarLinkParser` works out which parameter is the title, which
+are the timestamps (including Google's `A/B` range) and which holds the guests,
+rewriting each as a placeholder; the reading is shown before it is saved, and
+hand-written placeholders are taken as-is. Stored in
+`~/Library/Application Support/Piko/calendar-links.json` and filled in with the
+same scheduling rules as every other path.
+
+A follow-up's call link and guest list come from the matched event when there
+is one, and otherwise from two fields in the sheet — an imported recording has
+no event to inherit from, and plenty of calls are in nobody's calendar. What is
+typed wins over what was matched, and it is remembered with the meeting.
+Reusable sets of people are `GuestGroup`s in
+`~/Library/Application Support/Piko/guest-groups.json` — app-level, because "the
+ML team" is not a property of one call. Guests only become a real invitation on
+the ICS path; EventKit refuses to write attendees, so there they are listed in
+the note instead.
+
+The file is offered first because it reaches every calendar and costs no
+permission; Calendar and Reminders follow. Which one a row belongs in depends on
+the row — a follow-up is an event, "collect the eval set" is a task — so it is a
+per-send choice in `ExportReviewSheet` rather than a setting. An item
+with no resolved date cannot become an event and is greyed out there — an event
+on a guessed day is worse than no event. Both targets are recorded separately
+in the overlay, so one row can legitimately be a task *and* an event. That sheet
+is the one confirm step in the feature, because it writes into another app.
+
 ### Captions skill (`src/piko/skills/captions/`)
 
 Word-level Whisper timestamps flow through:
@@ -193,7 +278,8 @@ drop manually downloaded clips into the folders instead.
 - **SPM + AVKit**: `Package.swift` must keep `.linkedFramework("AVKit")`. SPM autolinks only the `_AVKit_SwiftUI` overlay; without AVKit itself the app crashes at runtime (`getSuperclassMetadata` abort) the moment `VideoPlayer` appears.
 - **BackendService project-root discovery** walks up looking for `pyproject.toml` from the bundle path (covers `build/Piko.app` inside the repo) and from `#filePath` (covers bare-executable runs via Xcode/`swift run`, which build into DerivedData/`.build`). Both are dev-machine assumptions by design.
 - **Swift concurrency**: `swift build` treats some Swift-6 concurrency issues as warnings; don't mutate captured locals inside the `MainActor.run` closures in VM stream loops.
-- **TCC hates ad-hoc signatures**: a permission grant is keyed to the app's designated requirement, which `codesign --sign -` does not provide — every rebuild then looks like a new app and macOS re-asks for the microphone and system audio. `scripts/make-signing-cert.sh` creates a local "Piko Dev" identity once; `make-app.sh` uses it automatically and falls back to ad-hoc with a warning. Reset a grant while testing with `tccutil reset Microphone dev.bogdanminko.piko` (and `AudioCapture` / `SystemAudioCaptureRequests` for system audio).
+- **TCC hates ad-hoc signatures**: a permission grant is keyed to the app's designated requirement, which `codesign --sign -` does not provide — every rebuild then looks like a new app and macOS re-asks for the microphone and system audio. `scripts/make-signing-cert.sh` creates a local "Piko Dev" identity once; `make-app.sh` uses it automatically and falls back to ad-hoc with a warning. Reset a grant while testing with `tccutil reset Microphone dev.bogdanminko.piko` (and `AudioCapture` / `SystemAudioCaptureRequests` for system audio, `Reminders` for the action-item export).
+- **Hardened Runtime fails silently, TCC does not**: `make-app.sh` signs with `--options runtime`, and under it a protected resource needs its entitlement even though the app is *not* sandboxed. Without one there is no prompt, no error, and the app never appears in the Privacy pane at all — the request dies before TCC sees it. That is exactly what an unentitled Calendar export looked like. `com.apple.security.device.audio-input` covers the microphone, `com.apple.security.personal-information.calendars` covers Calendar; Reminders needs no entitlement of its own. Symptom to recognise: "Piko isn't in the list" ≠ a denied grant, and `tccutil reset` will not fix it.
 - **Deployment target is macOS 14.4** (`Package.swift` + `LSMinimumSystemVersion`), set by Core Audio process taps — the API lands in 14.2 but its permission prompt only behaves from 14.4.
 - After changing UI state flow, remember `MainView` re-renders on changes of `selectedStyle`, `wordMode`, `highlightColorHex` via `.onChange` → `reRender()` (only when state is `.done`).
 - Renaming/moving: project was renamed creit→piko in-place; if the venv or Swift `.build` cache misbehaves after a rename, delete `.venv`/`.build` and rebuild.
