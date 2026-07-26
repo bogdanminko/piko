@@ -4,6 +4,9 @@ struct StylePickerView: View {
     @Bindable var processor: VideoProcessorVM
     var previews: StylePreviewsVM
 
+    @State private var showClearConfirm = false
+    @State private var cacheSize = "…"
+
     /// TikTok and Karaoke animate words themselves; word modes only
     /// apply to the line-based styles.
     private var supportsWordMode: Bool {
@@ -82,31 +85,35 @@ struct StylePickerView: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Output Folder")
+                Text("Storage")
                     .font(.headline)
 
-                Text(processor.outputDirDescription)
+                Text("Results stay in the app cache until you press Save.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
 
-                HStack(spacing: 8) {
-                    Button("Change…") {
-                        processor.chooseOutputDir()
-                    }
-                    .controlSize(.small)
-
-                    if processor.outputDirOverride != nil {
-                        Button("Use Default") {
-                            processor.resetOutputDir()
-                        }
-                        .controlSize(.small)
-                    }
+                Button("Clear Cache (\(cacheSize))…") {
+                    showClearConfirm = true
                 }
+                .controlSize(.small)
+                .disabled(processor.isProcessing)
             }
             .padding(.horizontal)
             .padding(.bottom, 12)
+        }
+        .onAppear {
+            cacheSize = VideoProcessorVM.cacheSizeDescription()
+        }
+        .alert("Clear the app cache?", isPresented: $showClearConfirm) {
+            Button("Clear Everything", role: .destructive) {
+                processor.clearCache()
+                cacheSize = VideoProcessorVM.cacheSizeDescription()
+                // Preview strips were cached too — regenerate them.
+                Task { await previews.load() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes all cached transcriptions, rendered videos, and previews. Unsaved results will be lost.")
         }
     }
 }
@@ -114,12 +121,12 @@ struct StylePickerView: View {
 extension Color {
     /// Init from "#RRGGBB".
     init(hex: String) {
-        let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
-        let v = UInt64(h, radix: 16) ?? 0xFFD700
+        let digits = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))
+        let rgb = UInt64(digits, radix: 16) ?? 0xFFD700
         self.init(
-            red: Double((v >> 16) & 0xFF) / 255,
-            green: Double((v >> 8) & 0xFF) / 255,
-            blue: Double(v & 0xFF) / 255
+            red: Double((rgb >> 16) & 0xFF) / 255,
+            green: Double((rgb >> 8) & 0xFF) / 255,
+            blue: Double(rgb & 0xFF) / 255
         )
     }
 }

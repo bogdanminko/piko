@@ -32,47 +32,90 @@ class VideoProcessorVM {
     private let backend = BackendService()
 
     // --- Output location ---
+    // Everything renders into the app cache; nothing is written next to the
+    // user's video. The user explicitly exports via Save when satisfied.
 
-    private static let outputDirKey = "outputDirOverride"
+    /// Same directory the Python backend uses (~/Library/Caches/piko).
+    static let cacheDir = FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Caches/piko")
 
-    /// Custom output folder chosen by the user; nil = default
-    /// ("piko_output" next to the source video). Persisted.
-    var outputDirOverride: String? = UserDefaults.standard.string(forKey: "outputDirOverride") {
-        didSet {
-            UserDefaults.standard.set(outputDirOverride, forKey: Self.outputDirKey)
-        }
+    private var rendersDir: URL {
+        Self.cacheDir.appendingPathComponent("renders")
     }
 
-    /// Effective output folder for the current video, for display.
-    var outputDirDescription: String {
-        if let dir = outputDirOverride {
-            return (dir as NSString).abbreviatingWithTildeInPath
-        }
-        return "piko_output (next to video)"
+    /// Copy the rendered video out of the cache to a user-chosen location.
+    func saveVideo() {
+        guard let outputURL, let videoURL else { return }
+        exportFile(
+            from: outputURL,
+            suggestedName: videoURL.deletingPathExtension().lastPathComponent + "_subtitled.mp4"
+        )
     }
 
-    func outputDir(for video: URL) -> URL {
-        if let dir = outputDirOverride {
-            return URL(fileURLWithPath: dir)
-        }
-        return video.deletingLastPathComponent()
-            .appendingPathComponent("piko_output")
+    /// Copy the generated .ass subtitle file to a user-chosen location.
+    func saveSubtitles() {
+        guard let subtitleURL, let videoURL else { return }
+        exportFile(
+            from: subtitleURL,
+            suggestedName: videoURL.deletingPathExtension().lastPathComponent + ".ass"
+        )
     }
 
-    func chooseOutputDir() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
+    private func exportFile(from source: URL, suggestedName: String) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = suggestedName
         panel.canCreateDirectories = true
-        panel.prompt = "Use Folder"
 
-        if panel.runModal() == .OK, let url = panel.url {
-            outputDirOverride = url.path
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: source, to: dest)
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Could not save file"
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+            alert.runModal()
         }
     }
 
-    func resetOutputDir() {
-        outputDirOverride = nil
+    // --- Cache management ---
+
+    /// Total size of the app cache (transcriptions, renders, emoji, previews).
+    static func cacheSizeDescription() -> String {
+        let fm = FileManager.default
+        var total: Int64 = 0
+        if let enumerator = fm.enumerator(at: cacheDir,
+                                          includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) {
+            for case let file as URL in enumerator {
+                let size = (try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?
+                    .totalFileAllocatedSize ?? 0
+                total += Int64(size)
+            }
+        }
+        return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
+    }
+
+    /// Wipe the whole app cache. Unsaved renders and cached transcriptions
+    /// are gone after this, so the session falls back to the pre-render state.
+    func clearCache() {
+        let fm = FileManager.default
+        if let items = try? fm.contentsOfDirectory(at: Self.cacheDir,
+                                                   includingPropertiesForKeys: nil) {
+            for item in items {
+                try? fm.removeItem(at: item)
+            }
+        }
+        renderCache = [:]
+        transcriptionPath = nil
+        outputURL = nil
+        subtitleURL = nil
+        if case .done = state {
+            state = .idle
+        }
     }
 
     var hasVideo: Bool { videoURL != nil }
@@ -86,18 +129,16 @@ class VideoProcessorVM {
         guard let provider = providers.first else { return false }
 
         let videoTypes: [UTType] = [.movie, .video, .mpeg4Movie, .quickTimeMovie, .avi]
-        for type in videoTypes {
-            if provider.hasItemConformingToTypeIdentifier(type.identifier) {
-                provider.loadItem(forTypeIdentifier: type.identifier) { item, _ in
-                    if let url = item as? URL {
-                        Task { @MainActor in self.setVideo(url) }
-                    } else if let data = item as? Data,
-                              let url = URL(dataRepresentation: data, relativeTo: nil) {
-                        Task { @MainActor in self.setVideo(url) }
-                    }
+        for type in videoTypes where provider.hasItemConformingToTypeIdentifier(type.identifier) {
+            provider.loadItem(forTypeIdentifier: type.identifier) { item, _ in
+                if let url = item as? URL {
+                    Task { @MainActor in self.setVideo(url) }
+                } else if let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil) {
+                    Task { @MainActor in self.setVideo(url) }
                 }
-                return true
             }
+            return true
         }
         return false
     }
@@ -129,7 +170,7 @@ class VideoProcessorVM {
         // Stage 1: transcription — mapped to 0...70% of overall progress.
         let params: [String: Any] = [
             "video_path": videoURL.path,
-            "model": modelId,
+            "model": modelId
         ]
 
         for await message in await backend.execute(command: "transcribe", params: params) {
@@ -165,6 +206,19 @@ class VideoProcessorVM {
     }
 
     /// Re-render with the current style using the cached transcription.
+    /// Output-path suffix encodes every setting that affects the result,
+    /// so each combination gets its own file and cache slot.
+    private func renderSuffix(style: String) -> String {
+        var suffix = "_subtitled_\(style)"
+        if wordMode != .static {
+            suffix += "_\(wordMode.rawValue)"
+            if wordMode == .highlight {
+                suffix += "_\(highlightColorHex.dropFirst().lowercased())"
+            }
+        }
+        return suffix
+    }
+
     /// Called when the user switches style after a completed run.
     func reRender() async {
         guard canReRender, !isProcessing else { return }
@@ -175,18 +229,9 @@ class VideoProcessorVM {
         guard let videoURL, let transcriptionPath else { return }
 
         let style = selectedStyle.rawValue
-        // Output path encodes every setting that affects the result,
-        // so each combination gets its own file and cache slot.
-        var suffix = "_subtitled_\(style)"
-        if wordMode != .static {
-            suffix += "_\(wordMode.rawValue)"
-            if wordMode == .highlight {
-                suffix += "_\(highlightColorHex.dropFirst().lowercased())"
-            }
-        }
         let baseName = videoURL.deletingPathExtension().lastPathComponent
-        let outputPath = outputDir(for: videoURL)
-            .appendingPathComponent(baseName + suffix + ".mp4").path
+        let outputPath = rendersDir
+            .appendingPathComponent(baseName + renderSuffix(style: style) + ".mp4").path
 
         // Already rendered with these exact settings — reuse instantly.
         if let cached = renderCache[outputPath],
@@ -209,7 +254,7 @@ class VideoProcessorVM {
             "style": style,
             "output_path": outputPath,
             "word_mode": wordMode.rawValue,
-            "highlight_color": highlightColorHex,
+            "highlight_color": highlightColorHex
         ]
 
         for await message in await backend.execute(command: "render", params: params) {

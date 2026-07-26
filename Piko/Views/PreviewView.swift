@@ -43,24 +43,23 @@ struct PreviewView: View {
                           value: "\(processor.keywordsFound)")
             }
 
-            // Actions
+            // Actions — the render lives in the app cache until the user
+            // explicitly saves it somewhere.
             HStack(spacing: 12) {
-                Button("Show in Finder") {
-                    if let url = processor.outputURL {
-                        NSWorkspace.shared.selectFile(url.path, inFileViewerRootedAtPath: "")
-                    }
+                Button("Save Video…") {
+                    processor.saveVideo()
                 }
+                .buttonStyle(.borderedProminent)
 
-                if let subtitleURL = processor.subtitleURL {
-                    Button("Open .ass File") {
-                        NSWorkspace.shared.open(subtitleURL)
+                if processor.subtitleURL != nil {
+                    Button("Save Subtitles…") {
+                        processor.saveSubtitles()
                     }
                 }
 
                 Button("Process Another") {
                     onReset()
                 }
-                .buttonStyle(.borderedProminent)
             }
             .padding(.bottom)
         }
