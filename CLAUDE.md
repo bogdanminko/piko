@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Piko** — macOS app that burns "viral-style" animated subtitles (MrBeast/TikTok look) into videos, fully locally on Apple Silicon. Two layers communicating over a JSON protocol:
+**Piko** — an open-source local AI workspace for macOS, powered by small models. Everything runs locally on Apple Silicon. See [docs/PRODUCT.md](docs/PRODUCT.md) for the full product context: the core model is `Input → Artifact → Skill → Model → Result → Export`.
+
+Currently implemented: the **captions skill** — burns "viral-style" animated subtitles (MrBeast/TikTok look) into videos. The next vertical is **Meeting Summary** (see PRODUCT.md); don't build agents, marketplaces, or extra inference providers before that ships.
+
+Two layers communicating over a JSON protocol:
 
 - **Python backend** (`src/piko/`) — mlx-whisper transcription, ASS subtitle generation (pysubs2), ffmpeg burn-in. Managed by `uv`.
 - **SwiftUI frontend** (`Piko/`) — built with **SPM, not Xcode** (no .xcodeproj; Xcode is not installed on this machine, only Command Line Tools).
@@ -27,13 +31,41 @@ open build/Piko.app
 swift build
 ```
 
-There is no linter configured. ffmpeg/ffprobe are hardcoded to `/opt/homebrew/bin/` (`src/piko/video_processor.py`); the Swift side launches the backend via `~/.local/bin/uv run --project <root> python -m piko.main` (`Piko/Services/BackendService.swift`).
+There is no linter configured. ffmpeg/ffprobe are hardcoded to `/opt/homebrew/bin/` (`src/piko/core/media.py`); the Swift side launches the backend via `~/.local/bin/uv run --project <root> python -m piko.main` (`Piko/Services/BackendService.swift`).
+
+All docs, code comments, and commit messages are in English (the project is open source).
 
 ## Architecture
 
+### Backend layout (`src/piko/`)
+
+```
+main.py            # thin dispatcher: one JSON command from stdin → handler
+protocol.py        # emit() — newline-delimited JSON to stdout
+cache.py           # CACHE_DIR (~/Library/Caches/piko)
+core/              # capabilities shared across skills
+├── transcriber.py # mlx-whisper wrapper (stdout redirected to stderr)
+└── media.py       # ffmpeg/ffprobe: probe, extract_audio, burn_subtitles
+commands/          # protocol handlers, one module per area
+├── transcribe.py  # transcribe + on-disk transcription cache
+├── render.py      # render / process (drives the captions skill)
+├── previews.py    # style_previews
+└── models.py      # list/download/check Whisper models
+skills/
+└── captions/      # first skill: the whole subtitle pipeline
+    ├── generator.py        # generate_subtitles() — orchestrates the steps
+    ├── keyword_detector.py # prosody-based emphasis detection
+    ├── semantic_colors.py  # color words → paint + emoji (EN+RU)
+    ├── emoji_mapper.py / emoji_renderer.py
+    ├── preview.py          # PNG preview strips
+    └── styles/             # STYLES registry + BaseStyle + 5 styles
+```
+
+New skills (e.g. meeting summary) get their own `skills/<name>/` package and reuse `core/`.
+
 ### JSON protocol (the seam between Swift and Python)
 
-Each command = one short-lived Python process. Swift writes one JSON command to stdin; Python emits newline-delimited JSON messages (`progress` / `result` / `error` / `models`) to stdout. **stdout is protocol-only** — mlx-whisper's prints are redirected to stderr in `transcriber.py`; never `print()` to stdout in the backend. Message schema lives in `src/piko/main.py` (emit sites) and `Piko/Models/BackendMessage.swift` (one big optional-field struct; keep the two in sync + CodingKeys for snake_case).
+Each command = one short-lived Python process. Swift writes one JSON command to stdin; Python emits newline-delimited JSON messages (`progress` / `result` / `error` / `models`) to stdout. **stdout is protocol-only** — mlx-whisper's prints are redirected to stderr in `core/transcriber.py`; never `print()` to stdout in the backend. Message schema lives in `src/piko/commands/` (emit sites) and `Piko/Models/BackendMessage.swift` (one big optional-field struct; keep the two in sync + CodingKeys for snake_case).
 
 Commands: `process` (full pipeline, CLI convenience), `transcribe` (slow, cached), `render` (fast, repeatable), `style_previews`, `list_models`, `download_model`, `check_model`.
 
@@ -46,7 +78,7 @@ Transcription is decoupled from rendering so style/animation changes never re-ru
 
 The Swift `VideoProcessorVM` additionally keeps a per-session render cache keyed by output path (which encodes style+mode+color), so switching back to an already-rendered combination swaps files instantly without calling the backend. Output goes to `piko_output/` next to the source video by default; user can override the folder (persisted in UserDefaults key `outputDirOverride`).
 
-### Subtitle generation (`src/piko/subtitle_generator.py` → `styles/`)
+### Captions skill (`src/piko/skills/captions/`)
 
 Word-level Whisper timestamps flow through:
 1. `keyword_detector.py` — emphasis detection via 3 prosody signals (confidence ≥0.92, pause ≥0.3s before, duration ≥1.5× median), 2-of-3 required, EN+RU stop words. No NLP/TF-IDF — importance comes from *how* a word is spoken.
@@ -69,4 +101,4 @@ Word-level Whisper timestamps flow through:
 - **BackendService project-root discovery** walks up from the bundle path looking for `pyproject.toml` — the app only works when `build/Piko.app` lives inside the repo (dev setup by design).
 - **Swift concurrency**: `swift build` treats some Swift-6 concurrency issues as warnings; don't mutate captured locals inside the `MainActor.run` closures in VM stream loops.
 - After changing UI state flow, remember `MainView` re-renders on changes of `selectedStyle`, `wordMode`, `highlightColorHex` via `.onChange` → `reRender()` (only when state is `.done`).
-- Renaming/moving: project was renamed creit→piko in-place; the repo folder name may still be `creit` — nothing inside depends on the folder name.
+- Renaming/moving: project was renamed creit→piko in-place; if the venv or Swift `.build` cache misbehaves after a rename, delete `.venv`/`.build` and rebuild.
