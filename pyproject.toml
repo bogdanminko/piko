@@ -8,7 +8,7 @@ dependencies = [
     "huggingface-hub>=1.4.1",
     "mlx-whisper>=0.4.3",
     "pillow>=12.3.0",
-    "pysubs2>=1.8.0",
+    "pysubs2>=1.8.1",
 ]
 
 [project.scripts]
