@@ -20,9 +20,9 @@ derived data and not covered.
 
 ## What this is
 
-**Piko** — an open-source local AI workspace for macOS, powered by small models. Everything runs locally on Apple Silicon. See [docs/PRODUCT.md](docs/PRODUCT.md) for the product context (who it's for, priorities, what not to build) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design direction: the core model is `Input → Artifact → Skill → Model → Result → Export`.
+**Piko** — artifacts that finish the job: open source, local to the Mac. An artifact you can ask for is half a result, so every skill runs from the request through to the place the work actually lands. Everything runs locally on Apple Silicon. See [docs/PRODUCT.md](docs/PRODUCT.md) for the product context (who it's for, priorities, what not to build) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design direction: the core model is `Input → Artifact → Skill → Model → Result → Export`.
 
-Currently implemented: the **captions skill** — burns "viral-style" animated subtitles (MrBeast/TikTok look) into videos. The next vertical is **Meeting Summary** (see PRODUCT.md); don't build agents, marketplaces, or extra inference providers before that ships.
+Two skills are implemented. **Meeting Summary** is the further along of the two and the current focus: record a call, transcribe it, attribute speakers, summarize, and export action items. **Captions** came first — it burns "viral-style" animated subtitles (MrBeast/TikTok look) into videos. Don't build agents, marketplaces, or extra inference providers on top of either.
 
 Two layers communicating over a JSON protocol:
 
