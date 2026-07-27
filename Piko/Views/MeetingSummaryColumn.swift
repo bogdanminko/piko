@@ -100,13 +100,13 @@ struct MeetingSummaryColumn: View {
                         .lineLimit(2)
                 }
                 Spacer()
-                if let summary = meeting.composed {
-                    CopyButton(text: { MarkdownExport.make(summary, for: recording) },
-                               help: "Copy the whole summary")
-                }
                 SummaryLanguagePicker(summarizer: summarizer, disabled: meeting.isBusy)
                 RerunButton(title: "Rerun summary", disabled: meeting.isBusy) {
                     Task { await meeting.summarize(recording, params: params, force: true) }
+                }
+                if let summary = meeting.composed {
+                    CopyButton(text: { MarkdownExport.make(summary, for: recording) },
+                               help: "Copy the whole summary")
                 }
             }
         }

@@ -22,14 +22,36 @@ struct MeetingSummaryCards: View {
     /// from a row.
     var onSend: (([ComposedItem], TaskExporter.Target) -> Void)?
 
-    @Environment(\.pikoTheme) private var theme
+    // Not private: the sending and details halves of this view live in their own
+    // files (see MeetingSummaryCards+Sending / +Details for why).
+    @Environment(\.pikoTheme) var theme
     @State private var isSummaryExpanded = false
-    /// Calendar services Piko does not know about, added by the user.
-    @State private var customLinks: [CustomCalendarLink] = []
-    @State private var services = WebCalendarVisibility.visible
-    @State private var isEditingLinks = false
+    // Where a row can go. Not private, because the sending half of this view
+    // lives in MeetingSummaryCards+Sending.swift — see there for why it is its
+    // own file.
+    /// Calendars and trackers Piko does not know about, added by the user.
+    @State var links: [LinkTemplate] = []
+    /// The ones that need no setup, minus whatever the user has hidden.
+    @State var services: [WebCalendarLink.Service] = []
+    @State var trackers: [LinkPreset] = []
+    /// Which kind of link is being managed, while the sheet is open.
+    @State var editingLinks: LinkKind?
+    /// Something worth saying about the last link that was opened — that nothing
+    /// answered it, or that the row went to the clipboard because its create
+    /// screen takes no URL. Either way said out loud rather than swallowed.
+    @State var openNote: OpenNote?
+
+    struct OpenNote: Identifiable {
+        let id = UUID()
+        let title: String
+        let message: String
+    }
     /// The row the pointer is over, so its send and edit affordances appear.
-    @State private var hoveredRow: String?
+    @State var hoveredRow: String?
+    /// The row whose assignee/deadline/epic popover is open.
+    @State var detailsRow: String?
+    /// Whether the meeting-wide epic is being set.
+    @State var isEditingEpic = false
     /// The row being edited, and the draft it is holding. One at a time: two
     /// half-finished edits on screen is a state nobody asked for.
     @State private var editingRow: String?
@@ -43,10 +65,22 @@ struct MeetingSummaryCards: View {
             if !summary.openQuestions.isEmpty { citedCard("Open questions", summary.openQuestions) }
         }
         .onAppear { reloadLinks() }
-        .sheet(isPresented: $isEditingLinks) {
-            CalendarLinksSheet(onChange: reloadLinks)
+        .sheet(item: $editingLinks) { kind in
+            LinksSheet(kind: kind, onChange: reloadLinks)
+        }
+        .alert(openNote?.title ?? "", isPresented: Binding(
+            get: { openNote != nil },
+            set: { if !$0 { openNote = nil } }
+        )) {
+            Button("OK") { openNote = nil }
+        } message: {
+            Text(openNote?.message ?? "")
         }
     }
+
+    /// One row-control square, matching `RowIconButton`. The row reserves its
+    /// slots from this so nothing shifts when a control fades in.
+    static let controlSlot: CGFloat = 22
 
     static func clockText(_ seconds: Double) -> String {
         let total = Int(seconds.rounded())
@@ -63,7 +97,6 @@ struct MeetingSummaryCards: View {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
                     SectionLabel(text: "Brief")
-                    copyButton { _ in MarkdownExport.brief(summary) }
                     Spacer()
                     if !summary.summary.isEmpty {
                         Button {
@@ -81,6 +114,7 @@ struct MeetingSummaryCards: View {
                         }
                         .buttonStyle(.plain)
                     }
+                    copyButton { _ in MarkdownExport.brief(summary) }
                 }
 
                 Text(summary.brief)
@@ -126,8 +160,8 @@ struct MeetingSummaryCards: View {
             VStack(alignment: .leading, spacing: 9) {
                 HStack(spacing: 6) {
                     SectionLabel(text: title)
-                    copyButton { MarkdownExport.section(title, items: items, for: $0) }
                     Spacer()
+                    copyButton { MarkdownExport.section(title, items: items, for: $0) }
                 }
                 ForEach(items) { item in
                     HStack(alignment: .firstTextBaseline, spacing: 12) {
@@ -196,19 +230,24 @@ struct MeetingSummaryCards: View {
                 Text("\(openCount) / \(summary.actionItems.count)")
                     .font(.system(size: 11))
                     .foregroundStyle(theme.dim)
+            }
+            Spacer()
+            meetingEpicControl
+            Button("+ Add item") { meeting.addManualItem() }
+                .buttonStyle(GhostButtonStyle())
+            // One accent action, destination chosen in the sheet: which app a
+            // task belongs in depends on the task, not on a setting — but it
+            // opens on wherever the last send went, since that is the answer
+            // most likely to still be right.
+            Button("Send…") { onSend?(summary.actionItems, TaskExporter.LastUsed.target) }
+                .buttonStyle(AccentButtonStyle(compact: true))
+                .disabled(summary.actionItems.isEmpty)
+            if !summary.actionItems.isEmpty {
                 copyButton {
                     MarkdownExport.section("Action items", items: summary.actionItems,
                                            for: $0, checkboxes: true)
                 }
             }
-            Spacer()
-            Button("+ Add item") { meeting.addManualItem() }
-                .buttonStyle(GhostButtonStyle())
-            // One accent action, destination chosen in the sheet: which app a
-            // task belongs in depends on the task, not on a setting.
-            Button("Send…") { onSend?(summary.actionItems, .icsFile) }
-                .buttonStyle(AccentButtonStyle(compact: true))
-                .disabled(summary.actionItems.isEmpty)
         }
     }
 
@@ -225,17 +264,12 @@ struct MeetingSummaryCards: View {
                                    filled: false)
                     }
                 }
-                DueRow(item: item, isRowHovered: hoveredRow == item.id, destinations: destinations(item))
+                DueRow(item: item, isRowHovered: hoveredRow == item.id,
+                       destinations: destinations(item),
+                       onEdit: { detailsRow = item.id })
             }
             Spacer(minLength: 8)
-            if let owner = item.owner {
-                Text(owner)
-                    .font(.system(size: 11.5))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 2)
-                    .background(theme.card2, in: RoundedRectangle(cornerRadius: 5))
-                    .foregroundStyle(theme.text)
-            }
+            detailsControl(item)
             editControls(item)
             timecode(item.start)
             moreControl(item)
@@ -254,38 +288,45 @@ struct MeetingSummaryCards: View {
                  onCancel: { editingRow = nil })
     }
 
-    /// Edit while reading, save and discard while editing. Shown on hover so a
-    /// screen full of rows is not a screen full of buttons.
-    @ViewBuilder
+    /// Edit while reading, save and discard while editing. Faded rather than
+    /// absent while the pointer is elsewhere: a screen full of rows should not be
+    /// a screen full of buttons, but a control that appears on hover *moves* the
+    /// row it appears in, and every row twitching as the pointer crosses it is
+    /// worse than a pale icon. The slot is two buttons wide at all times, which
+    /// is what editing needs.
     private func editControls(_ item: ComposedItem) -> some View {
-        if editingRow == item.id {
-            HStack(spacing: 2) {
+        let isEditing = editingRow == item.id
+        return HStack(spacing: 2) {
+            if isEditing {
                 RowIconButton(icon: "xmark", help: "Discard the change (Esc)") {
                     editingRow = nil
                 }
                 RowIconButton(icon: "checkmark", help: "Save (Enter)", tint: theme.accent) {
                     save(item)
                 }
-            }
-        } else if hoveredRow == item.id {
-            RowIconButton(icon: "pencil",
-                          help: "Change the wording — the model's original is kept") {
-                startEditing(item)
+            } else {
+                RowIconButton(icon: "pencil",
+                              help: "Change the wording — the model's original is kept") {
+                    startEditing(item)
+                }
+                .opacity(hoveredRow == item.id ? 1 : 0)
+                .allowsHitTesting(hoveredRow == item.id)
             }
         }
+        .frame(width: Self.controlSlot * 2 + 2, alignment: .trailing)
     }
 
     /// Everything destructive or rare, one step behind a menu — and far from
     /// the pencil. A bare bin next to the edit button was hit by accident
     /// within a minute of shipping it; an undo does not make that acceptable.
-    @ViewBuilder
     private func moreControl(_ item: ComposedItem) -> some View {
-        if hoveredRow == item.id, editingRow != item.id {
-            RowMenuButton {
-                rowMenu(item, sendable: false)
-            }
-            .padding(.leading, 12)
+        let isShown = hoveredRow == item.id && editingRow != item.id
+        return RowMenuButton {
+            rowMenu(item, sendable: false)
         }
+        .opacity(isShown ? 1 : 0)
+        .allowsHitTesting(isShown)
+        .padding(.leading, 12)
     }
 
     /// Copy the card as Markdown. Every generated block gets one: reading a
@@ -295,11 +336,6 @@ struct MeetingSummaryCards: View {
         if let recording = meeting.selected {
             CopyButton(text: { text(recording) })
         }
-    }
-
-    private func reloadLinks() {
-        customLinks = CustomCalendarLinkStore.load()
-        services = WebCalendarVisibility.visible
     }
 
     private func startEditing(_ item: ComposedItem) {
@@ -312,18 +348,6 @@ struct MeetingSummaryCards: View {
         editingRow = nil
     }
 
-    /// The destinations, built once and used by both the right-click menu and
-    /// the badge on the row.
-    private func destinations(_ item: ComposedItem) -> ExportDestinations {
-        ExportDestinations(item: item,
-                           customLinks: customLinks,
-                           services: services,
-                           onSend: { onSend?($0, $1) },
-                           onOpenWeb: openInWeb,
-                           onOpenCustom: openCustom,
-                           onAddLink: { isEditingLinks = true })
-    }
-
     @ViewBuilder
     private func rowMenu(_ item: ComposedItem, sendable: Bool) -> some View {
         if sendable {
@@ -331,6 +355,11 @@ struct MeetingSummaryCards: View {
             Divider()
         }
         Button("Edit") { startEditing(item) }
+        // On the list where they mean something. A decision has no owner and no
+        // deadline — it already happened.
+        if item.list == .actionItems {
+            Button("Assignee, due date, epic…") { detailsRow = item.id }
+        }
         if item.isEdited {
             Button("Restore generated") { meeting.restoreGenerated(item) }
         }
@@ -340,25 +369,6 @@ struct MeetingSummaryCards: View {
         }
         Divider()
         Button("Delete", role: .destructive) { meeting.delete(item) }
-    }
-
-    /// For the people whose calendar lives in a browser tab rather than in an
-    /// account the Mac is signed into. The service's own compose screen opens
-    /// prefilled — including guests, which only it is allowed to invite.
-    private func openInWeb(_ item: ComposedItem, _ service: WebCalendarLink.Service) {
-        guard let recording = meeting.selected,
-              let url = WebCalendarLink.url(service, for: item, from: recording,
-                                            context: meeting.manualContext(for: recording))
-        else { return }
-        NSWorkspace.shared.open(url)
-    }
-
-    private func openCustom(_ item: ComposedItem, _ link: CustomCalendarLink) {
-        guard let recording = meeting.selected,
-              let url = link.url(for: item, from: recording,
-                                 context: meeting.manualContext(for: recording))
-        else { return }
-        NSWorkspace.shared.open(url)
     }
 
     @ViewBuilder

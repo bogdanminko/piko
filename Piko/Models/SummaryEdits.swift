@@ -17,10 +17,25 @@ struct SummaryEdits: Codable, Equatable {
     var items: [ItemEdit] = []
     /// Who and where a follow-up should point at, when the calendar cannot say.
     var followUp: FollowUp?
+    /// What every action item from this meeting starts out with.
+    var defaults: Defaults?
 
     var isEmpty: Bool {
         brief == nil && summary == nil && topics == nil && items.isEmpty
-            && (followUp?.isEmpty ?? true)
+            && (followUp?.isEmpty ?? true) && (defaults?.isEmpty ?? true)
+    }
+
+    /// Answers that belong to the call rather than to one row.
+    ///
+    /// An epic is the clearest case: the tasks from one planning call almost
+    /// always land under the same one, and nothing in the transcript can say
+    /// which — nobody reads a Jira key out loud. So it is stated once here and
+    /// inherited by every row, which may still override it.
+    struct Defaults: Codable, Equatable {
+        /// Jira's epic key, or whatever the tracker calls its parent.
+        var epic: String?
+
+        var isEmpty: Bool { epic?.isEmpty ?? true }
     }
 
     /// The call link and the guest list for follow-ups from this meeting.
@@ -86,10 +101,19 @@ struct SummaryEdits: Codable, Equatable {
         var origin: Origin = .generated
 
         var text: String?
+        // The overridable fields below share one convention, and it is the
+        // reason they are `String?` rather than `String`: nil is "the model's
+        // answer stands", and an *empty* string is "the user cleared it". Two
+        // different things — without the second there is no way to delete an
+        // owner the model invented, and Restore would have nothing to restore.
+        // See `SummaryEdits.override`.
         var owner: String?
         var due: String?
         var dueDate: String?
         var dueTime: String?
+        /// Never generated: no transcript states a Jira key. Inherited from the
+        /// meeting's defaults when this is nil, cleared when it is empty.
+        var epic: String?
         /// Manual items only — generated ones take the start from their anchor.
         var start: Double?
 
@@ -102,6 +126,7 @@ struct SummaryEdits: Codable, Equatable {
         /// ticking or exporting it. Drives the "edited" marker.
         var changesContent: Bool {
             text != nil || owner != nil || due != nil || dueDate != nil || dueTime != nil
+                || epic != nil
         }
 
         /// Nothing left worth keeping on disk — the row is back to what the
@@ -109,6 +134,15 @@ struct SummaryEdits: Codable, Equatable {
         var isNoop: Bool {
             origin == .generated && !deleted && !done && exports.isEmpty && !changesContent
         }
+    }
+
+    /// Which of an override and a generated value the screen should show.
+    ///
+    /// nil override → whatever was generated. Empty override → nothing, because
+    /// the user deleted it on purpose. Anything else → what they typed.
+    static func override(_ edit: String?, _ generated: String?) -> String? {
+        guard let edit else { return generated }
+        return edit.isEmpty ? nil : edit
     }
 
     /// Text reduced to what survives rewording: lowercase word characters.
@@ -121,225 +155,5 @@ struct SummaryEdits: Codable, Equatable {
 
     static func anchor(for item: MeetingSummary.Item, in list: List) -> Anchor {
         Anchor(list: list, start: item.start, fingerprint: fingerprint(item.text))
-    }
-}
-
-// MARK: - Composition
-
-/// One row as the screen shows it: the model's item with the user's edit
-/// applied, plus enough provenance to render "edited" and to restore.
-struct ComposedItem: Identifiable, Equatable {
-    var id: String
-    var list: SummaryEdits.List
-    var text: String
-    var owner: String?
-    /// The deadline as spoken. Kept beside the resolved date on purpose: it is
-    /// the evidence, the date is the suggestion.
-    var due: String?
-    var dueDate: String?
-    var dueTime: String?
-    /// Position in the recording. Nil only for a manual item added without one.
-    var start: Double?
-    var isDone: Bool
-    var isEdited: Bool
-    var origin: SummaryEdits.Origin
-    var exports: [SummaryEdits.ExportRecord]
-
-    /// The edit backing this row, if one exists yet.
-    var editID: UUID?
-    /// Where to re-attach an edit minted from this row.
-    var anchor: SummaryEdits.Anchor?
-    /// What the model produced, for Restore.
-    var generated: MeetingSummary.Item?
-
-    var isExported: Bool { !exports.isEmpty }
-
-    func export(to target: String) -> SummaryEdits.ExportRecord? {
-        exports.first { $0.target == target }
-    }
-}
-
-/// A whole summary as displayed: generated content plus the overlay.
-struct ComposedSummary: Equatable {
-    var brief: String
-    var summary: String
-    var topics: [String]
-    var decisions: [ComposedItem]
-    var actionItems: [ComposedItem]
-    var openQuestions: [ComposedItem]
-    var language: String?
-
-    var isBriefEdited: Bool
-    var isSummaryEdited: Bool
-    var areTopicsEdited: Bool
-
-    var isEmpty: Bool {
-        brief.isEmpty && decisions.isEmpty && actionItems.isEmpty && openQuestions.isEmpty
-    }
-
-    func items(in list: SummaryEdits.List) -> [ComposedItem] {
-        switch list {
-        case .decisions: return decisions
-        case .actionItems: return actionItems
-        case .openQuestions: return openQuestions
-        }
-    }
-
-    /// How far a citation may move between reruns and still be the same item.
-    /// A rerun cites a neighbouring transcript line, not a different minute.
-    static let anchorTolerance: Double = 15
-    /// Word overlap two texts need to count as the same item once the model has
-    /// reworded it.
-    static let anchorSimilarity: Double = 0.5
-
-    static func make(_ summary: MeetingSummary, edits: SummaryEdits) -> ComposedSummary {
-        var unused = edits.items
-        var lists: [SummaryEdits.List: [ComposedItem]] = [:]
-
-        // Generated items first, each claiming its edit if one still matches.
-        for list in SummaryEdits.List.allCases {
-            let generated = generatedItems(summary, list)
-            var rows: [ComposedItem] = []
-            for item in generated {
-                let anchor = SummaryEdits.anchor(for: item, in: list)
-                let matched = takeMatch(for: anchor, from: &unused)
-                if let matched, matched.deleted { continue }
-                rows.append(compose(item, anchor: anchor, edit: matched, list: list))
-            }
-            lists[list] = rows
-        }
-
-        // What is left: manual items, and edits whose generated item this rerun
-        // no longer produces. Both stay visible.
-        for edit in unused where !edit.deleted {
-            var orphan = edit
-            if orphan.origin == .generated { orphan.origin = .orphaned }
-            let list = orphan.list
-            lists[list, default: []].append(compose(nil, anchor: orphan.anchor, edit: orphan,
-                                                    list: list))
-        }
-
-        for list in SummaryEdits.List.allCases {
-            lists[list] = lists[list]?.sorted { left, right in
-                (left.start ?? .greatestFiniteMagnitude) < (right.start ?? .greatestFiniteMagnitude)
-            }
-        }
-
-        return ComposedSummary(
-            brief: edits.brief ?? summary.brief,
-            summary: edits.summary ?? summary.summary,
-            topics: edits.topics ?? summary.topics,
-            decisions: lists[.decisions] ?? [],
-            actionItems: lists[.actionItems] ?? [],
-            openQuestions: lists[.openQuestions] ?? [],
-            language: summary.language,
-            isBriefEdited: edits.brief != nil,
-            isSummaryEdited: edits.summary != nil,
-            areTopicsEdited: edits.topics != nil
-        )
-    }
-
-    private static func generatedItems(_ summary: MeetingSummary,
-                                       _ list: SummaryEdits.List) -> [MeetingSummary.Item] {
-        switch list {
-        case .decisions: return summary.decisions
-        case .actionItems: return summary.actionItems
-        case .openQuestions: return summary.openQuestions
-        }
-    }
-
-    private static func compose(_ item: MeetingSummary.Item?,
-                                anchor: SummaryEdits.Anchor?,
-                                edit: SummaryEdits.ItemEdit?,
-                                list: SummaryEdits.List) -> ComposedItem {
-        ComposedItem(
-            id: edit.map { "edit-\($0.id.uuidString)" }
-                ?? "gen-\(list.rawValue)-\(anchor?.start ?? 0)-\(anchor?.fingerprint ?? "")",
-            list: edit?.list ?? list,
-            text: edit?.text ?? item?.text ?? "",
-            owner: edit?.owner ?? item?.owner,
-            due: edit?.due ?? item?.due,
-            dueDate: edit?.dueDate ?? item?.dueDate,
-            dueTime: edit?.dueTime ?? item?.dueTime,
-            start: edit?.start ?? item?.start ?? anchor?.start,
-            isDone: edit?.done ?? false,
-            isEdited: edit?.changesContent ?? false,
-            origin: edit?.origin ?? .generated,
-            exports: edit?.exports ?? [],
-            editID: edit?.id,
-            anchor: anchor,
-            generated: item
-        )
-    }
-
-    /// Pull the edit that belongs to this anchor out of the pool, so no two
-    /// rows can claim the same one.
-    private static func takeMatch(for anchor: SummaryEdits.Anchor,
-                                  from pool: inout [SummaryEdits.ItemEdit]) -> SummaryEdits.ItemEdit? {
-        let candidates = pool.indices.filter { index in
-            guard let candidate = pool[index].anchor else { return false }
-            return candidate.list == anchor.list
-        }
-        // An unchanged citation is the same item, whatever the wording.
-        if let exact = candidates.first(where: { pool[$0].anchor?.fingerprint == anchor.fingerprint }) {
-            return pool.remove(at: exact)
-        }
-        let near = candidates
-            .filter { index in
-                guard let candidate = pool[index].anchor else { return false }
-                return abs(candidate.start - anchor.start) <= anchorTolerance
-                    && similarity(candidate.fingerprint, anchor.fingerprint) >= anchorSimilarity
-            }
-            .min { left, right in
-                let leftDelta = abs((pool[left].anchor?.start ?? 0) - anchor.start)
-                let rightDelta = abs((pool[right].anchor?.start ?? 0) - anchor.start)
-                return leftDelta < rightDelta
-            }
-        return near.map { pool.remove(at: $0) }
-    }
-
-    /// Word overlap, 0…1 (Jaccard). Deliberately crude: it only has to tell
-    /// "the model reworded this line" from "this is a different line".
-    static func similarity(_ left: String, _ right: String) -> Double {
-        let leftWords = Set(left.split(separator: " "))
-        let rightWords = Set(right.split(separator: " "))
-        if leftWords.isEmpty || rightWords.isEmpty { return 0 }
-        let union = leftWords.union(rightWords).count
-        return union == 0 ? 0 : Double(leftWords.intersection(rightWords).count) / Double(union)
-    }
-}
-
-// MARK: - Dates
-
-/// Formatting for the resolved deadline. The stored value stays an ISO day
-/// string — it is what the backend produced and what a reminder needs.
-enum DueDate {
-    static func date(from iso: String?, time: String? = nil) -> Date? {
-        guard let iso, !iso.isEmpty else { return nil }
-        var components = DateComponents()
-        let parts = iso.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return nil }
-        components.year = parts[0]
-        components.month = parts[1]
-        components.day = parts[2]
-        if let time {
-            let clock = time.split(separator: ":").compactMap { Int($0) }
-            if clock.count == 2 {
-                components.hour = clock[0]
-                components.minute = clock[1]
-            }
-        }
-        return Calendar.current.date(from: components)
-    }
-
-    /// "5 Aug" / "Aug 5", by locale; time appended when one was stated.
-    static func label(_ iso: String?, time: String? = nil) -> String? {
-        guard let date = date(from: iso) else { return nil }
-        let formatter = DateFormatter()
-        formatter.setLocalizedDateFormatFromTemplate(time == nil ? "MMMd" : "MMMd HHmm")
-        if time != nil, let withTime = self.date(from: iso, time: time) {
-            return formatter.string(from: withTime)
-        }
-        return formatter.string(from: date)
     }
 }

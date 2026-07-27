@@ -59,9 +59,10 @@ final class RecordingSession: @unchecked Sendable {
             self.startTime = Date()
             self.pausedTotal = 0
             self.pauseStarted = nil
-            // Drop whatever the captures buffered before the clock started.
-            self.mic?.buffer.drain()
-            self.system?.buffer.drain()
+            // Drop whatever the captures buffered before the clock started —
+            // the samples are discarded, hence the ignored return.
+            _ = self.mic?.buffer.drain()
+            _ = self.system?.buffer.drain()
 
             let timer = DispatchSource.makeTimerSource(queue: self.queue)
             timer.schedule(deadline: .now() + .milliseconds(100), repeating: .milliseconds(100))

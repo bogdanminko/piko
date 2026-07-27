@@ -30,7 +30,7 @@ final class AppState {
     private static let sidebarKey = "piko.sidebarCollapsed"
     private static let settingsKey = "piko.captionSettingsCollapsed"
 
-    var screen: AppScreen = .captions
+    var screen: AppScreen = .library
 
     /// Themes loaded from the Themes folder (`ThemeLibrary`); reloaded via
     /// `refreshCustomThemes()` whenever the generator saves or deletes one.

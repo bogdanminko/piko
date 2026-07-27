@@ -16,7 +16,14 @@ import pytest
 from piko.commands.meeting import MIXED_FILE, finalize_recording, handle_import_recording
 from piko.core.media import FFMPEG
 from piko.skills.meeting.audio import RAW_RATE, load_samples
-from piko.skills.meeting.speakers import SPEAKER_ME, SPEAKER_THEM, SPEAKER_UNKNOWN, attribute
+from piko.skills.meeting.diarize import Turn, diarize
+from piko.skills.meeting.speakers import (
+    SPEAKER_ME,
+    SPEAKER_THEM,
+    SPEAKER_UNKNOWN,
+    attribute,
+    speaker_names,
+)
 
 
 def _tone_track(path: Path, duration: float, loud_spans: list[tuple[float, float]]) -> None:
@@ -174,3 +181,102 @@ def test_single_track_recording_is_all_mine(recording: Path):
     tagged = attribute(segments, mic, np.zeros(0, dtype=np.float32))
 
     assert tagged[0]["speaker"] == SPEAKER_ME
+
+
+def test_far_end_voices_are_numbered(recording: Path):
+    """Diarization narrows "them" to the person who owns most of the segment."""
+    mic = load_samples(recording / "mic.pcm")
+    system = load_samples(recording / "system.pcm")
+    segments = [
+        {"start": 0.6, "end": 1.9, "text": "my question"},
+        {"start": 3.1, "end": 4.4, "text": "their answer"},
+    ]
+    # Slot 2 speaks first: the numbering must present it as Participant 1, with
+    # no gap where the unused slots were.
+    turns = [Turn(start=3.0, end=3.6, speaker=2), Turn(start=3.6, end=4.5, speaker=0)]
+
+    tagged = attribute(segments, mic, system, turns=turns)
+
+    assert tagged[0]["speaker"] == SPEAKER_ME
+    assert tagged[1]["speaker"] == "them-2"  # slot 0 holds 0.8s of it vs slot 2's 0.5s
+    assert speaker_names(tagged)["them-2"] == "Participant 2"
+
+
+def test_unresolved_far_end_segment_keeps_the_collective_label(recording: Path):
+    """A segment no turn touches stays "them" rather than joining a neighbour."""
+    mic = load_samples(recording / "mic.pcm")
+    system = load_samples(recording / "system.pcm")
+    segments = [{"start": 3.1, "end": 4.4, "text": "their answer"}]
+
+    tagged = attribute(segments, mic, system, turns=[Turn(start=9.0, end=9.5, speaker=0)])
+
+    assert tagged[0]["speaker"] == SPEAKER_THEM
+    assert speaker_names(tagged)["them"] == "Participants"
+
+
+def test_imported_audio_numbers_voices_without_placing_them():
+    """An import has no sides, so its voices are "Speaker N" — never "You"."""
+    silence = np.zeros(0, dtype=np.float32)
+    segments = [
+        {"start": 0.0, "end": 2.0, "text": "hello"},
+        {"start": 2.0, "end": 4.0, "text": "hi there"},
+    ]
+    turns = [Turn(start=0.0, end=2.0, speaker=1), Turn(start=2.0, end=4.0, speaker=3)]
+
+    tagged = attribute(segments, silence, silence, turns=turns)
+    names = speaker_names(tagged)
+
+    assert [segment["speaker"] for segment in tagged] == ["unknown-1", "unknown-2"]
+    assert names["unknown-1"] == "Speaker 1"
+    assert names["unknown-2"] == "Speaker 2"
+    # No side was measured, so nothing here is claimed with confidence.
+    assert all(segment["speaker_confidence"] == 0 for segment in tagged)
+
+
+def test_diarization_of_an_empty_track_is_not_attempted():
+    """No audio, no model load — and certainly no invented turns."""
+    assert diarize(np.zeros(0, dtype=np.float32)) == []
+
+
+def test_a_tie_goes_to_the_voice_that_was_actually_heard(recording: Path):
+    """The reported bug: a colleague's line inherited "me" from the line before.
+
+    The gap between the two utterances has no clear winner on either track, so
+    the old rule handed it to whoever spoke last. Diarization heard someone on
+    the far-end track through it, and hearing outranks inheriting.
+    """
+    mic = load_samples(recording / "mic.pcm")
+    system = load_samples(recording / "system.pcm")
+    quiet = {"start": 2.2, "end": 2.8, "text": "their quiet line"}
+    segments = [{"start": 0.6, "end": 1.9, "text": "my question"}, quiet]
+
+    inherited = attribute(segments, mic, system)
+    heard = attribute(segments, mic, system, turns=[Turn(start=2.0, end=3.0, speaker=0)])
+
+    assert inherited[1]["speaker"] == SPEAKER_ME  # what the bug looked like
+    assert heard[1]["speaker"] == "them-1"
+
+
+def test_partial_far_end_coverage_still_inherits(recording: Path):
+    """A turn brushing the edge of a tied segment is not enough to claim it."""
+    mic = load_samples(recording / "mic.pcm")
+    system = load_samples(recording / "system.pcm")
+    segments = [
+        {"start": 0.6, "end": 1.9, "text": "my question"},
+        {"start": 2.2, "end": 2.8, "text": "tied"},
+    ]
+
+    tagged = attribute(segments, mic, system, turns=[Turn(start=2.7, end=3.4, speaker=0)])
+
+    assert tagged[1]["speaker"] == SPEAKER_ME
+
+
+def test_an_undecidable_first_segment_is_not_credited_to_me(recording: Path):
+    """With no previous decision, the ratio decides — not a hardcoded side."""
+    mic = load_samples(recording / "mic.pcm")
+    system = load_samples(recording / "system.pcm")
+
+    tagged = attribute([{"start": 2.2, "end": 2.8, "text": "silence"}], mic, system)
+
+    assert tagged[0]["speaker"] in {SPEAKER_ME, SPEAKER_THEM}
+    assert tagged[0]["speaker_confidence"] < 0.08  # decided on a hair, and says so

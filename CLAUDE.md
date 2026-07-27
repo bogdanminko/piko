@@ -2,6 +2,22 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Personal data: do not read it
+
+`~/Library/Application Support/Piko/` is the user's own data — real meeting
+audio, transcripts, summaries, people, links. **Never read, list, print or copy
+anything under it without the user asking for that specific thing first.** It is
+not test material, and "I need a realistic case to verify against" is not a
+reason: ask for a file the user chooses to hand over, or build a synthetic one.
+
+This covers reading a recording folder to check a pipeline's output, printing
+transcript lines to judge a result, and enumerating recordings to find something
+to test on — all of it needs explicit acceptance first.
+
+Write access to that directory is a separate question and is what the app itself
+does; the rule here is about Claude reading it. `~/Library/Caches/piko/` is
+derived data and not covered.
+
 ## What this is
 
 **Piko** — an open-source local AI workspace for macOS, powered by small models. Everything runs locally on Apple Silicon. See [docs/PRODUCT.md](docs/PRODUCT.md) for the product context (who it's for, priorities, what not to build) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design direction: the core model is `Input → Artifact → Skill → Model → Result → Export`.
@@ -141,6 +157,37 @@ system audio has none — a tap without the grant "succeeds" and returns silence
 forever, so the check is empirical: start a tap, play a short sound, see if the
 tap heard it. That same first tap creation is what raises the macOS dialog.
 
+### Library: one session history over both verticals
+
+The Library screen (`LibraryView` + `LibraryRow`, model in `Models/LibraryItem.swift`)
+is a *derived* view, never a third store: it joins the two histories that already
+exist — meetings (folders under `Application Support/Piko/Recordings`, enumerated
+by `MeetingLibrary.list()`) and captions runs (`history.json`, `HistoryStore`) —
+so a recording is history the moment it is saved, with nothing to keep in sync.
+A row's stage (Recorded → Transcribed → Summarized, or Captioned) is read from the
+files on disk on every scan (`MeetingLibrary.hasTranscript/hasSummary`) rather than
+stored, so a rerun or a folder deleted from Finder can't leave a stale badge.
+Rows group by calendar day, open on their own screen (meeting → Meeting Summary
+with that recording selected, captions → Captions), and expose Rename, Reveal in
+Finder, Export Markdown (the *composed* summary, edits included) and delete.
+Deleting a captions entry only forgets the run; deleting a meeting destroys
+audio, so it is the one action behind a confirm — and it is absent from the
+sidebar entirely. The sidebar's Recent (`SidebarRecent`) is the same list,
+truncated.
+
+**Titles are generated, so they are editable.** A recorded call is named after
+its clock time and everything else after the file it came from, which makes a
+list of them unreadable by Friday. `EditableTitle` (hover the name → pencil, or
+Rename in the row menu; Enter and clicking away commit, Escape abandons, an
+empty field is a cancel) is the same control in all three places the name
+appears — Library row, sidebar Recent, the Recordings card on Meeting Summary.
+It writes into the record itself rather than an alias beside it: `title` in
+`meta.json` for a meeting (`MeetingVM.rename`), the history entry for a captions
+run (`HistoryStore.rename`), so one edit changes every list at once. Nothing
+regenerates over it — the backend only rewrites the keys it produces and leaves
+`title` alone, and `HistoryStore.record` reuses an existing entry's title
+instead of re-deriving it from the file name on a rerun.
+
 ### Action items: edits overlay, Reminders, `piko://`
 
 `summarize_meeting` writes `summary.json` and may rewrite it on any rerun, so it
@@ -149,7 +196,8 @@ wording, ticked boxes, deleted or hand-added items, where a task was exported �
 goes into **`summary.edits.json`** beside it (`Piko/Models/SummaryEdits.swift`,
 loaded by `MeetingLibrary`, mutated only through `MeetingVM+Edits.swift`). The
 screen renders `ComposedSummary.make(summary, edits:)`, the composition of the
-two; a rerun therefore cannot destroy an edit. Edits re-attach to regenerated
+two (`Piko/Models/ComposedSummary.swift` — what is rendered, never written; the
+file next door is what is stored); a rerun therefore cannot destroy an edit. Edits re-attach to regenerated
 items by anchor (same list, |Δstart| ≤ 15 s, ≥ 0.5 word overlap) — a rerun cites
 a neighbouring line, not a different minute. What does not re-attach becomes an
 `orphaned` row rather than being dropped: showing one stale row is recoverable,
@@ -162,19 +210,69 @@ stays in `due` as the evidence; `due_date` / `due_time` are the suggestion, and
 are absent whenever nothing resolved — the same null-over-guess rule as
 timecodes.
 
-Export is Swift-only: `TaskExporter` (EventKit → Reminders *or* Calendar) and
-`MarkdownExport`. Every exported entry carries `piko://meeting/<id>?t=<seconds>`
-in its URL field, and `MainView.onOpenURL` reopens that meeting — the
-verifiability promise does not stop at the window edge.
+### The three fields a transcript cannot answer
+
+Owner and deadline are generated whenever somebody said them out loud, and that
+is where the model's authority ends: half the tasks agreed on a call name no
+owner, "by Friday" is a phrase before it is a date, and nobody reads a Jira key
+into a meeting. So each is editable, together, in one popover off the row
+(`ItemDetailsPopover`, reached from the assignee chip, the date, or the row
+menu). The composition rules are what make that safe — see below.
+
+**nil is not empty.** Every overridable field (`owner`, `due`, `dueDate`,
+`dueTime`, `epic`) is a `String?` where nil means "the model's answer stands"
+and `""` means "the user deleted it" (`SummaryEdits.override`). Without the
+second there is no way to remove an owner the model invented: nil would simply
+let it come back on the next composition. `MeetingVM+Edits.override` is the
+other end of the same rule — typing back exactly what was generated drops the
+override rather than storing a copy, so a row stops reading as edited.
+
+**The epic has a meeting-level default** (`SummaryEdits.Defaults`, set from the
+Action items header) that every row inherits and any row may override or opt out
+of. It is the one field with no per-row generated value at all, so its fallback
+is the meeting's rather than the model's, and `isEpicInherited` renders it muted
+— the same key on twelve rows should read as one answer, not twelve.
+
+**Assignee is two values, not one.** `owner` stays the name that was said; it
+travels in the description, the Markdown and the CSV and it never fails.
+Reaching a tracker's actual assignee field needs that person's id there, which
+lives in `~/Library/Application Support/Piko/people.json` (`Person`,
+`PeopleBook`) — app-level, because "Dima is @dmitry on GitHub" is not a property
+of one call — and reaches the URL through `{assignee}`, resolved per service
+(`LinkTemplate.service`, read off the saved URL so pasted links and preset-built
+ones behave alike). An unknown person resolves to empty and takes the parameter
+with it: an email in Jira's `assignee` is ignored at best, so `handle(for:)`
+falls back to the address only when the service is unknown. The ids are edited
+where the name is typed (`PersonEditor` inside the popover) rather than in a
+settings screen visited twice a year, and deliberately without a Contacts grant
+— Contacts knows an address, not an accountId. `LinkPreset.assigneeServices`
+(Jira, GitHub) is the list that gets a field; GitLab and Linear want a numeric
+or UUID id that is not visible anywhere in their UI, so a field for them would
+be one nobody could fill in.
+
+Jira's epic field is a per-instance custom field id rather than a constant, so
+it is an optional setup field on the preset (`{epicfield}`, typically
+`customfield_10014`). Left blank, the epic still reaches the description via
+`ItemNote` — as it does on every other path, since "which epic" is worth reading
+even where it could not be set. The CSV carries it as Jira's own `Epic Link`
+column, and there the assignee is the *address* rather than the handle: an
+importer resolves people by email or username and never by accountId.
+
+Export is Swift-only: `TaskExporter` (EventKit → Reminders *or* Calendar),
+`CalendarFile` / `TaskFile` (`.ics` / `.csv`), `LinkTemplate` (anything with a
+prefillable URL) and `MarkdownExport`. Every exported entry carries
+`piko://meeting/<id>?t=<seconds>` in its URL field, and `MainView.onOpenURL`
+reopens that meeting — the verifiability promise does not stop at the window edge.
 
 EventKit rather than a cloud API is a product decision, not a shortcut: no key,
 no OAuth, no network, one system Allow — and it writes into whatever accounts
 the Mac already has, **including Google and Exchange calendars**. A Notion or
-Todoist integration would need a token and would send the meeting off the
+Jira *API* integration would need a token and would send the meeting off the
 machine. The keyless ladder, in order of what it costs the user: Copy/Save
-Markdown (nothing) → `.ics` (nothing, not built yet) → EventKit (one Allow) →
-third-party URL schemes (app must be installed, not built yet) → cloud APIs
-(key + network — deliberately out).
+Markdown (nothing) → `.ics` / `.csv` (nothing) → EventKit (one Allow) →
+prefilled web compose URLs (a browser tab, `LinkTemplate`) → third-party URL
+schemes (the app must be installed) → cloud APIs (key + network — deliberately
+out).
 
 A calendar follow-up also inherits from the meeting it came from
 (`MeetingContext`): the recording's time window is matched against the user's
@@ -187,7 +285,7 @@ that would need an account. Imported files are skipped — their `started_at` is
 the import time, not the call. The match is shown in the sheet with a switch,
 never applied silently: a wrong meeting would send everyone to the wrong room.
 
-Three destinations, because no single one fits everybody. **Reminders** and
+Several destinations, because no single one fits everybody. **Reminders** and
 **Calendar** go through EventKit — updatable by identifier, but only reaching
 accounts the Mac is signed into. **Calendar file** (`CalendarFile`) writes an
 `.ics`: no permission, no account, read by Google/Outlook/Fantastical/Notion
@@ -195,17 +293,26 @@ Calendar, and the only path that can carry `ATTENDEE` lines — an .ics *is* an
 invitation, so the guest list survives even though EventKit forbids writing
 attendees. Its trade-off is that nothing comes back, so a re-export writes a
 second file rather than updating (the stable `UID` at least lets a calendar
-recognise a re-import). `WebCalendarLink` is the fourth, zero-cost path for people
+recognise a re-import). `WebCalendarLink` is the zero-cost path for people
 whose calendar only exists in a browser tab: Google and Outlook (work and
 personal live on different hosts, so both are offered) open a prefilled compose
-screen where guests can be added in the UI that is allowed to invite them. Any
-other service is a `CustomCalendarLink` — the user pastes a link their calendar
-produced and `CalendarLinkParser` works out which parameter is the title, which
-are the timestamps (including Google's `A/B` range) and which holds the guests,
-rewriting each as a placeholder; the reading is shown before it is saved, and
-hand-written placeholders are taken as-is. Stored in
-`~/Library/Application Support/Piko/calendar-links.json` and filled in with the
-same scheduling rules as every other path.
+screen where guests can be added in the UI that is allowed to invite them.
+
+Any other service — calendar *or* tracker — is a `LinkTemplate`, a URL with
+placeholders in it. One type with a `LinkKind` rather than two near-identical
+ones, which is what lets Jira and Google Calendar share a parser, a store, a menu
+and a sheet; they differ in the two ways that matter, since an event must sit on a
+day and can carry guests while a task needs neither. `LinkParser` reads a pasted
+link the service itself produced and works out which parameter is the title,
+which are the timestamps (including Google's `A/B` range), which holds the guests
+or the deadline, rewriting each as a placeholder; the reading is shown before it
+is saved, and hand-written placeholders are taken as-is. Stored in
+`~/Library/Application Support/Piko/links.json` (migrated once from
+`calendar-links.json`, whose entries had no kind and were all calendars) and
+filled in with the same scheduling rules as every other path. A placeholder that
+resolves to nothing takes its whole query parameter with it: `duedate=` reads as
+a date to some services and as a malformed request to others, and neither is what
+"nobody said when" means.
 
 A follow-up's call link and guest list come from the matched event when there
 is one, and otherwise from two fields in the sheet — an imported recording has
@@ -217,14 +324,86 @@ ML team" is not a property of one call. Guests only become a real invitation on
 the ICS path; EventKit refuses to write attendees, so there they are listed in
 the note instead.
 
-The file is offered first because it reaches every calendar and costs no
-permission; Calendar and Reminders follow. Which one a row belongs in depends on
-the row — a follow-up is an event, "collect the eval set" is a task — so it is a
-per-send choice in `ExportReviewSheet` rather than a setting. An item
+**Trackers** are `LinkPreset`s, and they come in two sorts. Trello, Todoist,
+Things and OmniFocus need nothing at all, so they are built in exactly the way
+Google Calendar is — in the menu from the start, click and their screen opens
+(`LinkPreset.builtIn`, i.e. `fields.isEmpty`). Jira, GitHub, GitLab and Linear
+cannot be, because a create URL needs the user's own coordinates: Jira the
+address plus the numeric project and issue-type ids, GitHub the repository,
+GitLab the host and project path, Linear the team. Neither Jira nor GitLab is
+assumed to be the hosted one — `FieldValue.baseURL` takes a bare `acme` as a
+Cloud site and anything with a dot in it as the address it is, keeping a context
+path (`company.com/jira`) intact, and the parser derives the same base from a
+pasted link rather than gluing `atlassian.net` onto whatever it found. Those are `LinkPreset.configurable` —
+recipes for a saved link rather than destinations, filled in once and then stored
+like any pasted one. There is deliberately no "Connect Jira": nothing to connect
+to, no token, and nothing leaves the Mac until the person on this side presses
+Create. `{owner}` is the name as it was said and goes into the description;
+`{assignee}` is that person's id in *this* tracker and is the only thing written
+into an assignee field, because a name in a field expecting an account produces a
+task assigned to nobody. See "The three fields a transcript cannot answer" above. A built-in whose app is not installed is listed and
+switched off rather than hidden ("Piko has no Things support" and "Things is not
+on this Mac" are different sentences, and only one is true), and it never reaches
+the row menu, which only ever offers what `NSWorkspace` can actually open.
+
+Pasting a link is the main way a tracker gets set up, so `LinkParser` answers with
+a **`Reading`**, not an optional: `.ready`, `.incomplete(name:why:next:)`, or
+`.unrecognised`. The middle case is the point. Any GitHub, GitLab (self-hosted
+included — `/-/` in the path is its signature), Linear or Trello URL a person
+already has open carries the coordinates, so those are `.ready` from a repo page,
+an issue, a merge request, a board. On-premise Jira is recognised by its host
+containing "jira" or by a `/browse/KEY-123` path — that is the link people copy,
+and a self-hosted host is otherwise unguessable.
+
+Jira cannot be prefilled from the link people actually have. A `/browse/ABC-1130`
+URL names an *existing* issue by key; the create screen is a different endpoint
+that identifies the project by numeric `pid` plus `issuetype`, on Cloud as much as
+on Server, and no parameter accepts the key instead — which took reading
+Atlassian's own tracker to establish rather than guessing. Resolving key → id is
+one REST call that needs a token, so it is out by the same rule as everything else
+here.
+
+That does not make Jira unusable, and the fourth `Reading` case is why:
+**`.copyPaste`**. Any Jira link at all saves a working entry — it opens
+`<base>/secure/CreateIssue!default.jspa` and puts the row on the clipboard
+(`ItemNote.pasteable`, title first because that is where the cursor lands), so the
+cost is one ⌘V instead of a refusal. `LinkTemplate.copiesText` carries that, and
+the row is still recorded as sent. The sheet then says how to trade the paste for a
+real prefill: open that address, pick project and type, press Next, and the
+address you land on has both numbers — paste *that* and the same link upgrades to
+full prefill with the `piko://` backlink in the description. `.incomplete` remains
+for the cases with nothing usable at all (a GitLab group, a Linear workspace), and
+both it and `.copyPaste` carry a `prefill` of whatever *was* readable, so the setup
+form opens with the address already in it.
+
+**Task file** (`TaskFile`) is the tracker counterpart of the `.ics`: a CSV that
+Jira, Linear, Asana, Trello, ClickUp and Monday all import with no account and no
+token, and the only path that moves the whole list in one go rather than one
+compose screen per row. Columns are Jira's spelling because Jira is the least
+forgiving importer and the rest let you map by hand. Same snapshot trade-off as
+the `.ics`, but worse: importers mint their own ids, so a second import duplicates
+rather than updates. Multi-line fields (the citation always is) must be quoted —
+note that `"\r\n"` is a *single* Swift `Character`, so the structural-character
+test is a `Set<Character>`, not a search through a string literal.
+
+The destination menu is grouped by what the row *is* — task first, then event —
+because that is the only choice the reader makes, and because somebody who just
+saved a `.csv` of their action items is not about to put the same rows in a
+calendar. For the same reason the review sheet opens on wherever the last send
+went (`TaskExporter.LastUsed`, app-level: it is a property of how someone works,
+not of one call) rather than re-asking a settled question every time. An item
 with no resolved date cannot become an event and is greyed out there — an event
-on a guessed day is worse than no event. Both targets are recorded separately
-in the overlay, so one row can legitimately be a task *and* an event. That sheet
-is the one confirm step in the feature, because it writes into another app.
+on a guessed day is worse than no event. Every target is recorded separately in
+the overlay (`ExportKey` owns those strings: bare names for EventKit and the
+files, so overlays written before links existed keep their badges, then `web:`,
+`link:` and `preset:` prefixes), so one row can legitimately be a task *and* an
+event *and* a Jira issue. What a link may claim is narrower, though: no
+identifier comes back from a compose screen and whether Create was pressed over
+there is not ours to know, so those badges say "opened" and re-sending opens the
+screen again rather than updating anything. A scheme nothing on the Mac answers
+(`things:///add` without Things) is reported rather than swallowed — silence
+there is the same bug the send affordance was rebuilt to stop shipping. That
+sheet is the one confirm step in the feature, because it writes into another app.
 
 ### Captions skill (`src/piko/skills/captions/`)
 

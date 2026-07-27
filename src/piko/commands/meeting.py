@@ -22,7 +22,8 @@ from ..skills.meeting.audio import (
     mix_tracks,
     track_duration,
 )
-from ..skills.meeting.speakers import SPEAKER_NAMES, attribute
+from ..skills.meeting.diarize import Turn, diarize
+from ..skills.meeting.speakers import attribute, speaker_names
 from ..skills.meeting.summary import summarize
 from .transcribe import DEFAULT_MODEL, count_words, transcribe_video
 
@@ -186,6 +187,34 @@ def handle_transcribe_meeting(params: dict) -> None:
 
         data = transcribe_video(str(mixed), model, language, force=bool(params.get("force")))
 
+        tracks = meta.get("tracks", {})
+        mic = load_samples(folder / tracks.get("mic", {}).get("file", "mic.m4a"))
+        system = load_samples(folder / tracks.get("system", {}).get("file", "system.m4a"))
+
+        # Telling individual voices apart is opt-in (`"diarize": true`), because
+        # it is the one step here that downloads a model — 236 MB on first use —
+        # and the app promises that nothing downloads until you ask. It is also
+        # the expensive half: ~1 GB of peak memory on top of the transcriber.
+        # Everything below works without it, just less specifically.
+        #
+        # A recording is diarized on its far-end track alone — the microphone
+        # side is already settled physically, and a model can only unsettle it.
+        # An import has no sides to settle, so there the mix is all there is.
+        # With a mic track but no system track every segment is already "me",
+        # so there is nobody left to tell apart and the model is skipped.
+        voices = system if system.size else (mic[:0] if mic.size else load_samples(mixed))
+        turns: list[Turn] = []
+        if voices.size and params.get("diarize"):
+            emit(
+                {
+                    "type": "progress",
+                    "stage": "diarizing",
+                    "percent": 97,
+                    "message": "Telling the speakers apart...",
+                }
+            )
+            turns = diarize(voices)
+
         emit(
             {
                 "type": "progress",
@@ -194,16 +223,13 @@ def handle_transcribe_meeting(params: dict) -> None:
                 "message": "Matching voices to speakers...",
             }
         )
-        tracks = meta.get("tracks", {})
-        mic = load_samples(folder / tracks.get("mic", {}).get("file", "mic.m4a"))
-        system = load_samples(folder / tracks.get("system", {}).get("file", "system.m4a"))
-        segments = attribute(data["segments"], mic, system)
+        segments = attribute(data["segments"], mic, system, turns=turns)
 
         transcript = {
             "version": 1,
             "language": data["language"],
             "duration": meta.get("duration", 0.0),
-            "speakers": SPEAKER_NAMES,
+            "speakers": speaker_names(segments),
             "segments": segments,
         }
         transcript_path = folder / TRANSCRIPT_FILE

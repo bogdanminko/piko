@@ -175,7 +175,7 @@ struct ExportReviewSheet: View {
         }
         .padding(2)
         .background(theme.card2, in: RoundedRectangle(cornerRadius: 8))
-        .frame(width: 260)
+        .frame(width: 340)
     }
 
     private func contextRow(_ context: MeetingContext) -> some View {
@@ -338,8 +338,8 @@ struct ExportReviewSheet: View {
         let inherited = effectiveContext
         meeting.setFollowUp(link: link, guests: guestList, organizer: organizer)
 
-        if destination == .icsFile {
-            saveFile(context: inherited)
+        if destination == .icsFile || destination == .csvFile {
+            saveFile(destination, context: inherited)
             return
         }
 
@@ -347,6 +347,7 @@ struct ExportReviewSheet: View {
             do {
                 let identifiers = try await exporter.send(selected, from: recording,
                                                           to: destination, context: inherited)
+                TaskExporter.LastUsed.target = destination
                 onExported(destination, identifiers)
                 dismiss()
             } catch {
@@ -373,19 +374,26 @@ struct ExportReviewSheet: View {
         dismiss()
     }
 
-    /// The file path: no store, no permission, and the calendar app takes over
-    /// once it opens. The row remembers the path it was written to, which is
-    /// all a snapshot can honestly claim.
-    private func saveFile(context: MeetingContext?) {
+    /// The file paths: no store, no permission, and the other app takes over from
+    /// the file. The row remembers where it was written to, which is all a
+    /// snapshot can honestly claim — nothing comes back from either format.
+    private func saveFile(_ destination: TaskExporter.Target, context: MeetingContext?) {
         defer { isSending = false }
-        guard let document = CalendarFile.make(selected, from: recording, context: context) else {
-            failure = TaskExporter.ExportError.needsDate.localizedDescription
+        let document = destination == .csvFile
+            ? TaskFile.make(selected, from: recording)
+            : CalendarFile.make(selected, from: recording, context: context)
+        guard let document else {
+            failure = destination == .csvFile
+                ? "Nothing is selected to write."
+                : TaskExporter.ExportError.needsDate.localizedDescription
             return
         }
-        guard let url = CalendarFile.save(document, suggestedName: recording.title) else {
-            return  // cancelled in the save panel
-        }
-        onExported(.icsFile, Dictionary(uniqueKeysWithValues: selected.map { ($0.id, url.path) }))
+        let url = destination == .csvFile
+            ? TaskFile.save(document, suggestedName: recording.title)
+            : CalendarFile.save(document, suggestedName: recording.title)
+        guard let url else { return }  // cancelled in the save panel
+        TaskExporter.LastUsed.target = destination
+        onExported(destination, Dictionary(uniqueKeysWithValues: selected.map { ($0.id, url.path) }))
         dismiss()
     }
 }

@@ -5,7 +5,9 @@ import Observation
 /// the same video updates its entry instead of duplicating it.
 struct HistoryEntry: Codable, Identifiable {
     let videoPath: String
-    let title: String
+    /// Starts as the file's name and stays editable from the Library — see
+    /// `rename`. Reprocessing the same video keeps whatever it says.
+    var title: String
     let kind: String
     var style: String
     var language: String?
@@ -39,9 +41,12 @@ final class HistoryStore {
     /// Record a completed captions run. Newest first, deduplicated by path.
     func record(videoURL: URL, style: String, language: String?, wordCount: Int) {
         let ext = videoURL.pathExtension.uppercased()
+        // A rerun updates the run, not the name: re-deriving the title from the
+        // file would silently drop a rename the person typed.
+        let existing = entries.first { $0.videoPath == videoURL.path }
         let entry = HistoryEntry(
             videoPath: videoURL.path,
-            title: videoURL.deletingPathExtension().lastPathComponent,
+            title: existing?.title ?? videoURL.deletingPathExtension().lastPathComponent,
             kind: ext.isEmpty ? "Video" : "Video · \(ext)",
             style: style,
             language: language,
@@ -58,6 +63,17 @@ final class HistoryStore {
 
     func clear() {
         entries = []
+        save()
+    }
+
+    /// Rename an artifact. The video file itself is the user's own and is never
+    /// touched — only the name this run is listed under.
+    func rename(_ entry: HistoryEntry, to title: String) {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty,
+              let index = entries.firstIndex(where: { $0.id == entry.id }),
+              entries[index].title != name else { return }
+        entries[index].title = name
         save()
     }
 

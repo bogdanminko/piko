@@ -30,11 +30,55 @@ extension MeetingVM {
         }
     }
 
+    /// Who is on the hook. Clearing a name the model produced stores an empty
+    /// string rather than nothing: nil would mean "the model's answer stands"
+    /// and the name would simply come back — see `SummaryEdits.override`.
     func setOwner(_ owner: String?, for item: ComposedItem) {
-        let trimmed = owner?.trimmingCharacters(in: .whitespacesAndNewlines)
         mutate(item) { edit in
-            edit.owner = (trimmed?.isEmpty ?? true) ? nil : trimmed
+            edit.owner = override(owner, generated: item.generated?.owner)
         }
+    }
+
+    /// The deadline, by hand. `date` is "yyyy-MM-dd" and `time` is "HH:mm"; a
+    /// nil time is a day with no hour, which is a different thing from midnight
+    /// and is what an all-day calendar entry is made of.
+    ///
+    /// The spoken phrase in `due` is deliberately left alone. It is the evidence
+    /// — what was actually said — and a correction to the date is not a claim
+    /// that somebody said something else.
+    func setDue(date: String?, time: String?, for item: ComposedItem) {
+        mutate(item) { edit in
+            edit.dueDate = override(date, generated: item.generated?.dueDate)
+            edit.dueTime = override(time, generated: item.generated?.dueTime)
+        }
+    }
+
+    /// The tracker parent for one row. Empty clears it, including an inherited
+    /// one: "everything from this call except this" is a real answer.
+    func setEpic(_ epic: String?, for item: ComposedItem) {
+        mutate(item) { edit in
+            // No model ever generates an epic, so the fallback is the meeting's
+            // default — and matching it means this row has nothing of its own.
+            edit.epic = override(epic, generated: edits.defaults?.epic?.nonEmpty)
+        }
+    }
+
+    /// The epic every action item from this meeting starts under. Rows that
+    /// stated their own keep it; the rest follow along.
+    func setDefaultEpic(_ epic: String?) {
+        var defaults = edits.defaults ?? SummaryEdits.Defaults()
+        defaults.epic = epic?.nonEmpty
+        edits.defaults = defaults.isEmpty ? nil : defaults
+        persistEdits()
+    }
+
+    /// nil when the typed value is what would have been shown anyway (so the
+    /// row stops reading as edited), "" when it was cleared, the value itself
+    /// otherwise.
+    private func override(_ typed: String?, generated: String?) -> String? {
+        let trimmed = typed?.nonEmpty
+        if trimmed == nil { return generated == nil ? nil : "" }
+        return trimmed == generated ? nil : trimmed
     }
 
     /// Removes the row. A generated item is remembered as deleted — otherwise
@@ -61,6 +105,7 @@ extension MeetingVM {
             edit.due = nil
             edit.dueDate = nil
             edit.dueTime = nil
+            edit.epic = nil
             edit.deleted = false
         }
     }

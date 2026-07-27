@@ -1,242 +1,326 @@
+import AppKit
 import SwiftUI
 
-/// The full artifact library backend does not exist yet, but the table is
-/// real: it lists the local processing history and reopens entries in
-/// Captions. With no history yet it falls back to a dimmed design preview.
+/// Every session Piko has on disk, in one list: meetings (recorded or
+/// imported) and captions runs. It reads the two stores that already exist —
+/// `MeetingLibrary` and `HistoryStore` — so a call recorded on the Meeting
+/// Summary screen is history here the moment it is saved, with no third copy
+/// to keep in sync.
 struct LibraryView: View {
     @Bindable var appState: AppState
     var processor: VideoProcessorVM
     var history: HistoryStore
-    @Environment(\.pikoTheme) private var theme
+    var meeting: MeetingVM
 
-    private struct SampleRow: Identifiable {
-        let id = UUID()
-        let title: String
-        let kind: String
-        let length: String
-        let added: String
-        let status: String
+    @Environment(\.pikoTheme) private var theme
+    @State private var query = ""
+    @State private var filter: Filter = .all
+    /// Deleting a meeting destroys audio the user cannot get back, so it is the
+    /// one row action that asks first.
+    @State private var pendingDeletion: LibraryItem?
+    @State private var recordingsSize: Int64 = 0
+
+    enum Filter: String, CaseIterable, Identifiable {
+        case all, meetings, captions
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .all: "All"
+            case .meetings: "Meetings"
+            case .captions: "Captions"
+            }
+        }
     }
 
-    private let sampleRows = [
-        SampleRow(title: "Team sync — July 12", kind: "Audio · M4A",
-                  length: "58:12", added: "today, 11:02", status: "Summarized"),
-        SampleRow(title: "Product demo for investors", kind: "Video · MOV",
-                  length: "12:04", added: "yesterday, 19:40", status: "Captioned"),
-        SampleRow(title: "Planning: Q3 roadmap", kind: "Audio · WAV",
-                  length: "41:37", added: "July 24", status: "Transcribed"),
-        SampleRow(title: "User interview #7", kind: "Audio · M4A",
-                  length: "33:20", added: "July 23", status: "In queue"),
-        SampleRow(title: "Incident review 07/04", kind: "Video · MP4",
-                  length: "26:45", added: "July 21", status: "Summarized")
-    ]
+    // MARK: - Data
 
-    private let columns: [GridItem] = [
-        GridItem(.flexible(), alignment: .leading),
-        GridItem(.fixed(120), alignment: .leading),
-        GridItem(.fixed(70), alignment: .leading),
-        GridItem(.fixed(120), alignment: .leading),
-        GridItem(.fixed(100), alignment: .leading),
-        GridItem(.fixed(22), alignment: .center)
-    ]
+    private var allItems: [LibraryItem] {
+        LibraryItem.all(meetings: meeting.recordings, captions: history.entries)
+    }
+
+    private func matches(_ item: LibraryItem, _ filter: Filter) -> Bool {
+        switch filter {
+        case .all: true
+        case .meetings: item.recording != nil
+        case .captions: item.captionsEntry != nil
+        }
+    }
+
+    private var visibleItems: [LibraryItem] {
+        let text = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return allItems.filter { item in
+            guard matches(item, filter) else { return false }
+            guard !text.isEmpty else { return true }
+            return item.title.lowercased().contains(text)
+                || item.subtitle.lowercased().contains(text)
+        }
+    }
+
+    // MARK: - Body
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            ScreenHeader(title: "Library", subtitle: "One place for everything Piko has processed") {
-                HStack(spacing: 10) {
-                    ComingSoonBadge()
-                    searchField
-                }
+        VStack(alignment: .leading, spacing: 16) {
+            ScreenHeader(title: "Library",
+                         subtitle: "Every session Piko has on disk") {
+                searchField
             }
-            dropCard
-            tablePreview
-            Spacer(minLength: 0)
+            if allItems.isEmpty {
+                emptyState
+                Spacer(minLength: 0)
+            } else {
+                filterRow
+                sessionList
+                footer
+            }
         }
         .padding(EdgeInsets(top: 22, leading: 26, bottom: 22, trailing: 26))
+        // Recordings made in this session's Meeting Summary screen are already
+        // in the VM; a rescan also catches a folder deleted from outside.
+        .onAppear {
+            meeting.refresh()
+            recordingsSize = meeting.recordings.reduce(0) { $0 + MeetingLibrary.sizeOnDisk($1) }
+        }
+        .confirmationDialog(
+            "Delete this recording?",
+            isPresented: Binding(get: { pendingDeletion != nil },
+                                 set: { if !$0 { pendingDeletion = nil } }),
+            presenting: pendingDeletion
+        ) { item in
+            Button("Delete", role: .destructive) { confirmDeletion(item) }
+            Button("Cancel", role: .cancel) { pendingDeletion = nil }
+        } message: { item in
+            Text("“\(item.title)” — audio, transcript and summary — is removed from disk. "
+                 + "This cannot be undone.")
+        }
     }
 
     private var searchField: some View {
-        Text("Search artifacts")
-            .font(.system(size: 12.5))
-            .foregroundStyle(theme.dim)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 6)
-            .frame(width: 200, alignment: .leading)
-            .background(theme.card, in: RoundedRectangle(cornerRadius: 7))
-            .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(theme.line))
-    }
-
-    private var dropCard: some View {
-        HStack(spacing: 20) {
-            RoundedRectangle(cornerRadius: 11)
-                .fill(theme.card2)
-                .frame(width: 46, height: 46)
-                .overlay {
-                    Image(systemName: "tray.and.arrow.down")
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(theme.dim)
+            TextField("Search sessions", text: $query)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12.5))
+                .foregroundStyle(theme.text)
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
                         .foregroundStyle(theme.dim)
                 }
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Drop anything.")
-                    .font(.system(size: 19, weight: .semibold))
-                    .foregroundStyle(theme.text)
-                Text("Video, audio, transcript or document — Piko will suggest matching skills.")
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(theme.dim)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 11)
+        .padding(.vertical, 6)
+        .frame(width: 220)
+        .background(theme.card, in: RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(theme.line))
+    }
+
+    // MARK: - Filters
+
+    private var filterRow: some View {
+        HStack(spacing: 7) {
+            ForEach(Filter.allCases) { value in
+                filterChip(value)
             }
             Spacer(minLength: 0)
         }
-        .padding(EdgeInsets(top: 26, leading: 24, bottom: 26, trailing: 24))
-        .cardSurface(theme)
-        .overlay {
-            RoundedRectangle(cornerRadius: 10)
-                .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 1, dash: [5]))
+    }
+
+    private func filterChip(_ value: Filter) -> some View {
+        let isActive = filter == value
+        let count = allItems.filter { matches($0, value) }.count
+        return Button {
+            filter = value
+        } label: {
+            HStack(spacing: 6) {
+                Text(value.title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(isActive ? theme.text : theme.dim)
+                Text("\(count)")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(theme.dim)
+            }
+            .padding(.horizontal, 11)
+            .padding(.vertical, 4)
+            .background(isActive ? theme.card2 : Color.clear, in: Capsule())
+            .overlay(Capsule().strokeBorder(isActive ? theme.accent : theme.line))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - List
+
+    @ViewBuilder
+    private var sessionList: some View {
+        if visibleItems.isEmpty {
+            noMatchesState
+            Spacer(minLength: 0)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 15) {
+                    ForEach(LibraryItem.byDay(visibleItems)) { day in
+                        daySection(day)
+                    }
+                }
+                .padding(.bottom, 4)
+            }
         }
     }
 
-    private var tablePreview: some View {
-        let hasHistory = !history.entries.isEmpty
-        return VStack(alignment: .leading, spacing: 7) {
-            LazyVGrid(columns: columns, spacing: 0) {
-                ForEach(["Artifact", "Kind", hasHistory ? "Words" : "Length", "Added", "Status", ""],
-                        id: \.self) {
-                    SectionLabel(text: $0)
+    private func daySection(_ day: LibraryDay) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            SectionLabel(text: day.title)
+                .padding(.horizontal, 2)
+            VStack(spacing: 0) {
+                ForEach(day.items) { item in
+                    LibraryRow(item: item,
+                               isOpen: isOpen(item),
+                               onOpen: { open(item) },
+                               onExportMarkdown: { exportMarkdown(item) },
+                               onRename: { rename(item, to: $0) },
+                               onDelete: { delete(item) })
+                    if item.id != day.items.last?.id {
+                        Rectangle().fill(theme.line).frame(height: 1)
+                    }
                 }
             }
             .padding(.horizontal, 12)
-
-            if hasHistory {
-                historyTable
-            } else {
-                sampleTable
-            }
-
-            Text(hasHistory
-                 ? "Local processing history — the full artifact library ships with the Meeting Summary skill."
-                 : "Sample data — the library ships together with the Meeting Summary skill.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(theme.dim)
-                .padding(.top, 4)
+            .padding(.vertical, 2)
+            .cardSurface(theme)
         }
     }
 
-    private var historyTable: some View {
-        VStack(spacing: 0) {
-            ForEach(history.entries) { entry in
-                historyRow(entry)
-                if entry.id != history.entries.last?.id {
-                    Rectangle().fill(theme.line).frame(height: 1)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 2)
-        .cardSurface(theme)
-    }
+    // MARK: - Empty states
 
-    /// A tap anywhere in the row opens the entry; the trailing "..." menu
-    /// intercepts its own taps first, so it never triggers the row's open.
-    private func historyRow(_ entry: HistoryEntry) -> some View {
-        LazyVGrid(columns: columns, spacing: 0) {
-            HStack(spacing: 10) {
-                VideoThumbView(path: entry.videoPath, cornerRadius: 5)
-                    .frame(width: 38, height: 24)
-                    .opacity(entry.fileExists ? 1 : 0.4)
-                Text(entry.title)
-                    .font(.system(size: 13))
-                    .foregroundStyle(entry.fileExists ? theme.text : theme.dim)
-                    .lineLimit(1)
-            }
-            Text(entry.kind).font(.system(size: 12)).foregroundStyle(theme.dim)
-            Text("\(entry.wordCount)")
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundStyle(theme.text)
-            Text(entry.date.formatted(.dateTime.day().month(.abbreviated).hour().minute()))
-                .font(.system(size: 12))
-                .foregroundStyle(theme.dim)
-            Text("Captioned · \(entry.style)")
-                .font(.system(size: 11.5))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 2)
-                .background(theme.card2, in: RoundedRectangle(cornerRadius: 5))
-                .foregroundStyle(theme.positive)
-                .lineLimit(1)
-            entryMenu(entry)
-        }
-        .padding(.vertical, 11)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard entry.fileExists else { return }
-            openEntry(entry)
-        }
-    }
-
-    /// Borderless "..." menu. Removing only drops the history entry — the
-    /// source video file is untouched, so it works for missing files too.
-    private func entryMenu(_ entry: HistoryEntry) -> some View {
-        Menu {
-            Button(role: .destructive) {
-                history.remove(entry)
-            } label: {
-                Label("Remove from Library", systemImage: "trash")
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 12))
-                .foregroundStyle(theme.dim)
-                .frame(width: 20, height: 20)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-    }
-
-    /// Reopen a processed video on the Captions screen. Clicking the entry
-    /// that is already open just navigates without restarting the pipeline.
-    private func openEntry(_ entry: HistoryEntry) {
-        appState.screen = .captions
-        guard processor.videoURL?.path != entry.videoPath else { return }
-        processor.reset()
-        processor.videoURL = URL(fileURLWithPath: entry.videoPath)
-    }
-
-    private var sampleTable: some View {
-        VStack(spacing: 0) {
-            ForEach(sampleRows) { row in
-                tableRow(row)
-                if row.id != sampleRows.last?.id {
-                    Rectangle().fill(theme.line).frame(height: 1)
-                }
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 2)
-        .cardSurface(theme)
-        .opacity(0.55)
-    }
-
-    private func tableRow(_ row: SampleRow) -> some View {
-        LazyVGrid(columns: columns, spacing: 0) {
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(theme.card2)
-                    .frame(width: 22, height: 22)
-                Text(row.title)
-                    .font(.system(size: 13))
+    private var emptyState: some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 9) {
+                Text("Nothing here yet.")
+                    .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(theme.text)
-                    .lineLimit(1)
+                Text("Record or drop a call on Meeting Summary, or caption a video — "
+                     + "every session lands here with its transcript and summary, "
+                     + "and reopens from this list.")
+                    .font(.system(size: 12.5))
+                    .lineSpacing(2)
+                    .foregroundStyle(theme.dim)
+                HStack(spacing: 9) {
+                    Button("Record a meeting") { appState.screen = .summary }
+                        .buttonStyle(AccentButtonStyle())
+                    Button("Caption a video") { appState.screen = .captions }
+                        .buttonStyle(GhostButtonStyle())
+                }
+                .padding(.top, 4)
             }
-            Text(row.kind).font(.system(size: 12)).foregroundStyle(theme.dim)
-            Text(row.length).font(.system(size: 12, design: .monospaced)).foregroundStyle(theme.text)
-            Text(row.added).font(.system(size: 12)).foregroundStyle(theme.dim)
-            Text(row.status)
-                .font(.system(size: 11.5))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 2)
-                .background(theme.card2, in: RoundedRectangle(cornerRadius: 5))
-                .foregroundStyle(theme.positive)
-            Color.clear
         }
-        .padding(.vertical, 11)
+    }
+
+    private var noMatchesState: some View {
+        Text(query.isEmpty
+             ? "No \(filter.title.lowercased()) yet."
+             : "Nothing matches “\(query)”.")
+            .font(.system(size: 12.5))
+            .foregroundStyle(theme.dim)
+            .padding(.vertical, 22)
+    }
+
+    // MARK: - Footer
+
+    private var footer: some View {
+        HStack(spacing: 10) {
+            Text(footerText)
+                .font(.system(size: 11.5))
+                .foregroundStyle(theme.dim)
+            Spacer(minLength: 0)
+            if FileManager.default.fileExists(atPath: MeetingLibrary.root.path) {
+                Button("Show Recordings in Finder") {
+                    NSWorkspace.shared.open(MeetingLibrary.root)
+                }
+                .buttonStyle(GhostButtonStyle())
+            }
+        }
+    }
+
+    private var footerText: String {
+        let sessions = allItems.count
+        var text = "\(sessions) session\(sessions == 1 ? "" : "s")"
+        if recordingsSize > 0 {
+            let size = ByteCountFormatter.string(fromByteCount: recordingsSize, countStyle: .file)
+            text += " · \(size) of recordings in Application Support"
+        }
+        return text
+    }
+
+    // MARK: - Actions
+
+    /// The session currently loaded on its own screen.
+    private func isOpen(_ item: LibraryItem) -> Bool {
+        switch item.source {
+        case .meeting(let recording): meeting.selectedID == recording.id
+        case .captions(let entry): processor.videoURL?.path == entry.videoPath
+        }
+    }
+
+    /// Meetings reopen on the summary screen, captions runs on Captions.
+    /// Clicking the one that is already open only navigates — nothing is
+    /// reprocessed.
+    private func open(_ item: LibraryItem) {
+        switch item.source {
+        case .meeting(let recording):
+            meeting.select(recording)
+            appState.screen = .summary
+        case .captions(let entry):
+            guard entry.fileExists else { return }
+            appState.screen = .captions
+            guard processor.videoURL?.path != entry.videoPath else { return }
+            processor.reset()
+            processor.videoURL = URL(fileURLWithPath: entry.videoPath)
+        }
+    }
+
+    /// The title is the one thing on a row a person owns; the rest is read off
+    /// disk. It is written back into whichever store the session came from —
+    /// meta.json for a meeting, history.json for a captions run — so the
+    /// sidebar's Recent and the Meeting Summary screen show it as well.
+    private func rename(_ item: LibraryItem, to title: String) {
+        switch item.source {
+        case .meeting(let recording): meeting.rename(recording, to: title)
+        case .captions(let entry): history.rename(entry, to: title)
+        }
+    }
+
+    /// Same file the summary screen exports: the generated summary with the
+    /// user's edits composed on top, never the raw one.
+    private func exportMarkdown(_ item: LibraryItem) {
+        guard let recording = item.recording,
+              let summary = MeetingLibrary.loadSummary(for: recording) else { return }
+        let composed = ComposedSummary.make(summary, edits: MeetingLibrary.loadEdits(for: recording))
+        MarkdownExport.save(MarkdownExport.make(composed, for: recording),
+                            suggestedName: recording.title)
+    }
+
+    /// Dropping a captions entry only forgets the run — the video it points at
+    /// is the user's own file and is never touched. A meeting is the opposite:
+    /// its folder *is* the material, so it goes through the confirm dialog.
+    private func delete(_ item: LibraryItem) {
+        if let entry = item.captionsEntry {
+            history.remove(entry)
+        } else {
+            pendingDeletion = item
+        }
+    }
+
+    private func confirmDeletion(_ item: LibraryItem) {
+        pendingDeletion = nil
+        guard let recording = item.recording else { return }
+        meeting.delete(recording)
+        recordingsSize = meeting.recordings.reduce(0) { $0 + MeetingLibrary.sizeOnDisk($1) }
     }
 }

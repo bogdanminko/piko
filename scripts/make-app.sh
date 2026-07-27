@@ -100,3 +100,40 @@ else
 fi
 
 echo "Built $APP"
+
+# Optionally hand the bundle to a folder launchers actually look in. Raycast and
+# Spotlight index /Applications and ~/Applications; a bundle inside the repo is
+# invisible to both, which is why the app "does not exist" outside a terminal.
+#
+# Moved, not copied, and on purpose: two bundles with this CFBundleIdentifier and
+# this `piko://` scheme are a race in LaunchServices over which one opens a
+# backlink, and it is free to pick the stale one. The Python backend stays in the
+# repo either way — BackendService finds it through the compile-time #filePath,
+# so this only works on the machine that built it. Signing happened above and
+# covers the contents, not the path, so the move keeps both the signature and
+# every TCC grant keyed to it.
+#
+# Opt in once with PIKO_INSTALL=1; every later build follows the bundle that is
+# already installed, so a plain rebuild cannot quietly leave a second one behind.
+INSTALLED=""
+for dir in "${PIKO_INSTALL_DIR:-/Applications}" "$HOME/Applications" /Applications; do
+    if [ -d "$dir/Piko.app" ]; then
+        INSTALLED="$dir"
+        break
+    fi
+done
+
+if [ "${PIKO_INSTALL:-0}" = "1" ] || [ -n "$INSTALLED" ]; then
+    DEST="${INSTALLED:-${PIKO_INSTALL_DIR:-/Applications}}"
+    if [ ! -w "$DEST" ]; then
+        DEST="$HOME/Applications"
+        mkdir -p "$DEST"
+        echo "/Applications is not writable — installing to $DEST instead."
+    fi
+    rm -rf "$DEST/Piko.app"
+    mv "$APP" "$DEST/Piko.app"
+    # Register it now, so the launcher and `piko://` find it without a re-login.
+    /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+        -f "$DEST/Piko.app"
+    echo "Installed $DEST/Piko.app"
+fi

@@ -220,9 +220,14 @@ struct WhisperModel: Codable, Identifiable {
     let speed: String
     let quality: String
     var downloaded: Bool
+    /// "asr" (one of them transcribes) or "speakers" (optional, runs after).
+    /// Optional so a payload from a backend that predates the split decodes.
+    let kind: String?
+
+    var isSpeakerModel: Bool { kind == "speakers" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, speed, quality
+        case id, name, speed, quality, kind
         case sizeMb = "size_mb"
         case ramMb = "ram_mb"
         case downloaded

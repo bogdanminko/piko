@@ -1,0 +1,31 @@
+# The research environment — deliberately NOT the app's.
+#
+# `Piko/Services/BackendService.swift` bootstraps the shipped venv with
+# `uv sync --frozen` and then runs `.venv/bin/python` directly, so anything
+# added to the root project lands inside the product. Notebooks, plotting and
+# Jupyter have no business there: they would be downloaded on first launch by
+# every user to support work only we do.
+#
+# So bench is its own uv project with its own lockfile and its own `.venv`.
+# It depends on piko as an editable path, which means the notebooks import the
+# real `piko.skills.meeting` code — the thing being measured — rather than a
+# copy that can drift.
+#
+#     uv sync --project bench
+#     uv run --project bench jupyter lab
+[project]
+name = "piko-bench"
+version = "0.0.0"
+description = "Research environment for Piko's benchmarks and probes"
+requires-python = ">=3.13"
+dependencies = [
+    "piko",
+    "ipykernel>=6.29",
+    "jupyterlab>=4.2",
+    "matplotlib>=3.9",
+    "jupyter>=1.1.1",
+    "pandas>=3.0.5",
+]
+
+[tool.uv.sources]
+piko = { path = "..", editable = true }

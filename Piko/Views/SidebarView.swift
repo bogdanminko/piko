@@ -8,7 +8,14 @@ struct SidebarView: View {
     var modelManager: ModelManagerVM
     var history: HistoryStore
     var processor: VideoProcessorVM
+    var meeting: MeetingVM
     @Environment(\.pikoTheme) private var theme
+
+    /// Recent is the Library's short head: both verticals, newest first, so a
+    /// call recorded five minutes ago is one click away from anywhere.
+    private var recentItems: [LibraryItem] {
+        LibraryItem.all(meetings: meeting.recordings, captions: history.entries)
+    }
 
     private static let icons: [AppScreen: String] = [
         .library: "square.grid.2x2",
@@ -85,10 +92,11 @@ struct SidebarView: View {
 
             SectionLabel(text: "Recent")
                 .padding(EdgeInsets(top: 16, leading: 10, bottom: 5, trailing: 10))
-            if history.entries.isEmpty {
+            if recentItems.isEmpty {
                 recentPlaceholder
             } else {
-                recentEntries
+                SidebarRecent(layout: .list, items: recentItems, appState: appState,
+                              history: history, processor: processor, meeting: meeting)
             }
 
             SectionLabel(text: "System")
@@ -126,85 +134,6 @@ struct SidebarView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-    }
-
-    /// The entry whose video is currently open on the Captions screen.
-    private func isOpen(_ entry: HistoryEntry) -> Bool {
-        processor.videoURL?.path == entry.videoPath
-    }
-
-    private var recentEntries: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            // "Loaded" state is deliberately quieter than the accent nav
-            // pill — only one thing in the sidebar should read as active.
-            ForEach(history.entries.prefix(4)) { entry in
-                recentRow(entry)
-            }
-        }
-    }
-
-    /// A tap anywhere in the row opens the entry; the trailing menu button
-    /// intercepts its own taps first, so it never triggers the row's open.
-    private func recentRow(_ entry: HistoryEntry) -> some View {
-        let isMissing = !entry.fileExists
-        let isActive = isOpen(entry)
-        return HStack(spacing: 9) {
-            VideoThumbView(path: entry.videoPath, cornerRadius: 3)
-                .frame(width: 24, height: 15)
-                .opacity(isMissing ? 0.4 : 1)
-            Text(entry.title)
-                .font(.system(size: 12.5))
-                .foregroundStyle(isMissing ? theme.dim : theme.text)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-            if isActive {
-                Circle().fill(theme.accent).frame(width: 5, height: 5)
-            }
-            entryMenu(entry, label: "Remove from Recent")
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(isActive ? theme.card2 : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 7))
-        .contentShape(Rectangle())
-        .onTapGesture {
-            guard !isMissing else { return }
-            openEntry(entry)
-        }
-        .help(isMissing ? "File moved or deleted" : entry.videoPath)
-    }
-
-    /// Borderless "..." menu shared by the sidebar row and (via LibraryView's
-    /// own copy) the Library table row. Removing only drops the history
-    /// entry — the source video file is untouched.
-    private func entryMenu(_ entry: HistoryEntry, label: String) -> some View {
-        Menu {
-            Button(role: .destructive) {
-                history.remove(entry)
-            } label: {
-                Label(label, systemImage: "trash")
-            }
-        } label: {
-            Image(systemName: "ellipsis")
-                .font(.system(size: 11))
-                .foregroundStyle(theme.dim)
-                .frame(width: 18, height: 18)
-                .contentShape(Rectangle())
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-    }
-
-    /// Reopen a processed video on the Captions screen. Transcription is
-    /// cached by the backend, so the run is fast. Clicking the entry that
-    /// is already open just navigates without restarting the pipeline.
-    private func openEntry(_ entry: HistoryEntry) {
-        appState.screen = .captions
-        guard !isOpen(entry) else { return }
-        processor.reset()
-        processor.videoURL = URL(fileURLWithPath: entry.videoPath)
     }
 
     /// Nothing processed yet — dimmed skeleton rows instead of an empty gap.
@@ -268,11 +197,10 @@ struct SidebarView: View {
             railButton(.summary)
             railButton(.captions)
 
-            if !history.entries.isEmpty {
+            if !recentItems.isEmpty {
                 railDivider
-                ForEach(history.entries.prefix(3)) { entry in
-                    railHistoryButton(entry)
-                }
+                SidebarRecent(layout: .rail, items: recentItems, appState: appState,
+                              history: history, processor: processor, meeting: meeting)
             }
 
             railDivider
@@ -299,31 +227,6 @@ struct SidebarView: View {
             .fill(theme.line)
             .frame(width: 22, height: 1)
             .padding(.vertical, 4)
-    }
-
-    private func railHistoryButton(_ entry: HistoryEntry) -> some View {
-        let isActive = isOpen(entry)
-        return Button {
-            openEntry(entry)
-        } label: {
-            VideoThumbView(path: entry.videoPath, cornerRadius: 4)
-                .frame(width: 24, height: 16)
-                .opacity(entry.fileExists ? 1 : 0.4)
-                .frame(width: 30, height: 30)
-                .background(
-                    isActive ? theme.card2 : Color.clear,
-                    in: RoundedRectangle(cornerRadius: 7)
-                )
-                .overlay {
-                    if isActive {
-                        RoundedRectangle(cornerRadius: 7).strokeBorder(theme.accent)
-                    }
-                }
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .disabled(!entry.fileExists)
-        .help(entry.title)
     }
 
     private func railButton(_ screen: AppScreen) -> some View {

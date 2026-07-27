@@ -81,12 +81,12 @@ final class MeetingVM {
     // MARK: - Recording
 
     /// One button: start, or stop and immediately transcribe what was recorded.
-    func toggleRecording(model: String) async {
+    func toggleRecording(model: String, diarize: Bool = false) async {
         if recorder.isActive {
             guard let recording = await recorder.stop() else { return }
             refresh()
             select(recording)
-            await transcribe(recording, model: model)
+            await transcribe(recording, model: model, diarize: diarize)
         } else {
             recorder.clearFailure()
             await recorder.start()
@@ -106,11 +106,11 @@ final class MeetingVM {
     /// Bring an existing file into the same pipeline — anything ffmpeg reads.
     /// Only its audio is extracted into the meeting folder; the file the user
     /// picked is left untouched where it is.
-    func importFile(at url: URL, model: String) async {
+    func importFile(at url: URL, model: String, diarize: Bool = false) async {
         guard !isBusy else { return }
         phase = .working(job: .transcript, percent: 0,
                          message: "Importing \(url.lastPathComponent)...")
-        let task = Task { await runImport(url, model: model) }
+        let task = Task { await runImport(url, model: model, diarize: diarize) }
         work = task
         await task.value
         work = nil
@@ -122,7 +122,7 @@ final class MeetingVM {
         work?.cancel()
     }
 
-    private func runImport(_ url: URL, model: String) async {
+    private func runImport(_ url: URL, model: String, diarize: Bool) async {
         let id = MeetingLibrary.newID()
         let recording = MeetingRecording(
             id: id,
@@ -181,7 +181,7 @@ final class MeetingVM {
 
         phase = .idle
         select(imported)
-        await runTranscription(imported, model: model)
+        await runTranscription(imported, model: model, diarize: diarize)
     }
 
     // MARK: - Library
@@ -210,6 +210,20 @@ final class MeetingVM {
         guard let match = recordings.first(where: { $0.id == recordingID }) else { return false }
         select(match)
         return true
+    }
+
+    /// The one field of a meeting a person owns — everything else in meta.json
+    /// is written by the recorder or the backend. It is stored there rather
+    /// than in an overlay because the backend only ever mutates the keys it
+    /// produces (`duration`, `mixed_file`, the track names) and leaves the
+    /// title alone, so a rerun cannot undo a rename.
+    func rename(_ recording: MeetingRecording, to title: String) {
+        let name = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name != recording.title else { return }
+        var updated = recording
+        updated.title = name
+        try? MeetingLibrary.save(updated)
+        refresh()
     }
 
     func delete(_ recording: MeetingRecording) {
@@ -270,9 +284,14 @@ final class MeetingVM {
         phase = failure.map { Phase.failed(job: .summary, message: $0) } ?? .idle
     }
 
-    func transcribe(_ recording: MeetingRecording, model: String, force: Bool = false) async {
+    func transcribe(_ recording: MeetingRecording,
+                    model: String,
+                    diarize: Bool = false,
+                    force: Bool = false) async {
         guard !isBusy else { return }
-        let task = Task { await runTranscription(recording, model: model, force: force) }
+        let task = Task {
+            await runTranscription(recording, model: model, diarize: diarize, force: force)
+        }
         work = task
         await task.value
         work = nil
@@ -280,6 +299,7 @@ final class MeetingVM {
 
     private func runTranscription(_ recording: MeetingRecording,
                                   model: String,
+                                  diarize: Bool = false,
                                   force: Bool = false) async {
         phase = .working(job: .transcript, percent: 0, message: "Preparing the recording...")
 
@@ -290,6 +310,9 @@ final class MeetingVM {
         // Re-running transcription leaves the old summary in place: it was
         // built from the previous text, so it is stale until re-run too.
         if force { params["force"] = true }
+        // Opt-in, and only sent when its model is already on disk — the
+        // backend must never be the thing that starts a download.
+        if diarize { params["diarize"] = true }
 
         var failure: String?
         for await message in await backend.execute(command: "transcribe_meeting", params: params) {

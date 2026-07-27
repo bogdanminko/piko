@@ -9,6 +9,9 @@ struct MeetingSummaryView: View {
     @Bindable var meeting: MeetingVM
     /// Whisper/Parakeet model chosen on the Models screen.
     let modelId: String
+    /// Whether to tell the far-end voices apart — the Speakers switch on the
+    /// Models screen, already checked against the model being on disk.
+    let diarize: Bool
     /// Tier, sampling and summary language picked on the Models screen.
     @Bindable var summarizer: SummarizerVM
 
@@ -17,6 +20,9 @@ struct MeetingSummaryView: View {
     @Environment(\.pikoTheme) private var theme
     @State private var isImporterPresented = false
     @State private var isDropTargeted = false
+    /// The recording whose name is being edited, if any — the rows are built by
+    /// a function, so the one editing state lives here rather than in each row.
+    @State private var renamingID: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -24,7 +30,7 @@ struct MeetingSummaryView: View {
             RecordingBar(
                 recorder: meeting.recorder,
                 permissions: meeting.permissions,
-                onToggle: { Task { await meeting.toggleRecording(model: modelId) } },
+                onToggle: { Task { await meeting.toggleRecording(model: modelId, diarize: diarize) } },
                 onPauseToggle: meeting.togglePause
             )
             HStack(alignment: .top, spacing: 20) {
@@ -54,7 +60,7 @@ struct MeetingSummaryView: View {
     }
 
     private func importFile(_ url: URL) {
-        Task { await meeting.importFile(at: url, model: modelId) }
+        Task { await meeting.importFile(at: url, model: modelId, diarize: diarize) }
     }
 
     /// The only export control on the screen: one button, with Copy behind a
@@ -166,10 +172,13 @@ struct MeetingSummaryView: View {
                 .foregroundStyle(isSelected ? theme.accent : theme.dim)
                 .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
-                Text(recording.title)
-                    .font(.system(size: 12.5))
-                    .foregroundStyle(theme.text)
-                    .lineLimit(1)
+                EditableTitle(
+                    text: recording.title,
+                    isEditing: Binding(get: { renamingID == recording.id },
+                                       set: { renamingID = $0 ? recording.id : nil }),
+                    font: .system(size: 12.5),
+                    onRename: { meeting.rename(recording, to: $0) }
+                )
                 Text(sourcesText(recording))
                     .font(.system(size: 10.5))
                     .foregroundStyle(theme.dim)
@@ -190,11 +199,14 @@ struct MeetingSummaryView: View {
         .padding(.horizontal, 6)
         .background(isSelected ? theme.card2 : .clear, in: RoundedRectangle(cornerRadius: 6))
         .contentShape(Rectangle())
-        .onTapGesture { meeting.select(recording) }
+        .onTapGesture {
+            guard renamingID != recording.id else { return }
+            meeting.select(recording)
+        }
     }
 
     private func hasTranscript(_ recording: MeetingRecording) -> Bool {
-        FileManager.default.fileExists(atPath: MeetingLibrary.transcriptURL(for: recording.id).path)
+        MeetingLibrary.hasTranscript(id: recording.id)
     }
 
     private func sourcesText(_ recording: MeetingRecording) -> String {
@@ -214,10 +226,6 @@ struct MeetingSummaryView: View {
             VStack(alignment: .leading, spacing: 11) {
                 HStack {
                     SectionLabel(text: "Transcript")
-                    if let transcript = meeting.transcript {
-                        CopyButton(text: { MarkdownExport.transcript(transcript) },
-                                   help: "Copy the transcript")
-                    }
                     Spacer()
                     if let language = meeting.transcript?.language {
                         Text(language)
@@ -227,9 +235,13 @@ struct MeetingSummaryView: View {
                     if let recording = meeting.selected, meeting.transcript != nil {
                         RerunButton(title: "Rerun", disabled: meeting.isBusy) {
                             Task {
-                                await meeting.transcribe(recording, model: modelId, force: true)
+                                await meeting.transcribe(recording, model: modelId, diarize: diarize, force: true)
                             }
                         }
+                    }
+                    if let transcript = meeting.transcript {
+                        CopyButton(text: { MarkdownExport.transcript(transcript) },
+                                   help: "Copy the transcript")
                     }
                 }
                 transcriptContent
@@ -255,7 +267,7 @@ struct MeetingSummaryView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if let recording = meeting.selected {
                     Button("Try again") {
-                        Task { await meeting.transcribe(recording, model: modelId) }
+                        Task { await meeting.transcribe(recording, model: modelId, diarize: diarize) }
                     }
                     .buttonStyle(AccentButtonStyle())
                 }
@@ -268,7 +280,7 @@ struct MeetingSummaryView: View {
                     .font(.system(size: 11.5))
                     .foregroundStyle(theme.dim)
                 Button("Transcribe") {
-                    Task { await meeting.transcribe(recording, model: modelId) }
+                    Task { await meeting.transcribe(recording, model: modelId, diarize: diarize) }
                 }
                 .buttonStyle(AccentButtonStyle())
                 .disabled(meeting.isBusy)
@@ -303,8 +315,9 @@ struct MeetingSummaryView: View {
                 Text(speakers[segment.speaker] ?? segment.speaker)
                     .font(.system(size: 11))
                     // The far side is the accent colour; my own voice and an
-                    // imported file's single speaker stay neutral.
-                    .foregroundStyle(segment.speaker == "them" ? theme.accent : theme.dim)
+                    // imported file's single speaker stay neutral. Named
+                    // participants ("them-2") are the far side too.
+                    .foregroundStyle(segment.speaker.hasPrefix("them") ? theme.accent : theme.dim)
                 Text(segment.text)
                     .font(.system(size: 12.5))
                     .lineSpacing(2)

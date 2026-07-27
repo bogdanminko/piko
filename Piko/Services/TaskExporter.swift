@@ -14,18 +14,24 @@ import Foundation
 /// so a task can still prove where it came from after it has left the app.
 @MainActor
 final class TaskExporter {
-    /// Where an item can be sent. Most action items are tasks; the ones that
-    /// *are* a meeting ("let's sync in two weeks") belong in the calendar
-    /// instead — that is the whole distinction this enum carries.
-    /// Order is the order they are offered in, widest reach first: the file
-    /// works with every calendar and needs no permission at all, EventKit only
-    /// reaches accounts this Mac is signed into, and tasks come last.
+    /// Where an item can be sent *without leaving Piko for another app's UI*.
+    /// Most action items are tasks; the ones that *are* a meeting ("let's sync in
+    /// two weeks") belong in the calendar instead — that is the first distinction
+    /// this enum carries. The second is a file versus a store: a file reaches
+    /// every calendar and every tracker and costs no permission, EventKit only
+    /// reaches accounts this Mac is signed into but can be updated later.
+    /// Order is the order they are offered in: the two event paths, then the two
+    /// task ones. Everything else a row can be sent to is a link — see
+    /// LinkTemplate — because it is the other app's own screen that opens.
     enum Target: String, CaseIterable, Identifiable {
         /// An .ics document — the format every calendar reads, and the only one
         /// that can carry a guest list. See CalendarFile.
         case icsFile = "ics"
         case calendar
         case reminders
+        /// A CSV every tracker imports, and the only path that moves the whole
+        /// list at once. See TaskFile.
+        case csvFile = "csv"
 
         var id: String { rawValue }
 
@@ -34,6 +40,7 @@ final class TaskExporter {
             case .icsFile: return "ICS"
             case .calendar: return "Calendar"
             case .reminders: return "Reminders"
+            case .csvFile: return "CSV"
             }
         }
 
@@ -42,6 +49,16 @@ final class TaskExporter {
             case .reminders: return "In Reminders"
             case .calendar: return "In Calendar"
             case .icsFile: return "Saved .ics"
+            case .csvFile: return "Saved .csv"
+            }
+        }
+
+        var icon: String {
+            switch self {
+            case .reminders: return "checklist"
+            case .calendar: return "calendar"
+            case .icsFile: return "doc"
+            case .csvFile: return "tablecells"
             }
         }
 
@@ -60,24 +77,46 @@ final class TaskExporter {
             case .reminders:
                 return "Tasks land in the “Piko” list. Each one carries the cited line and a "
                     + "piko:// link back to the second it was agreed on."
+            case .csvFile:
+                return "A CSV to import into Jira, Linear, Asana, Trello or Monday — the whole list "
+                    + "in one go, with no account and no token. Nothing comes back, so import it "
+                    + "once: a second import makes duplicates."
             }
         }
 
         /// An event needs a day to sit on; a task does not.
-        var requiresDate: Bool { self != .reminders }
+        var requiresDate: Bool { self == .icsFile || self == .calendar }
 
         /// Writing a file needs nothing from the system.
-        var needsPermission: Bool { self != .icsFile }
+        var needsPermission: Bool { self == .calendar || self == .reminders }
 
         /// Deep link into the exact Privacy pane. A denial is otherwise a dead
         /// end: the user is told where to go and left to find it.
         var settingsURL: URL? {
             switch self {
-            case .icsFile: return nil
+            case .icsFile, .csvFile: return nil
             case .calendar, .reminders:
                 let pane = self == .calendar ? "Privacy_Calendars" : "Privacy_Reminders"
                 return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")
             }
+        }
+    }
+
+    /// Where the last send went, so the next one opens there.
+    ///
+    /// People pick a lane and stay in it: somebody who exports a `.csv` of their
+    /// action items is not about to put the same rows in a calendar, and landing
+    /// on ICS every single time makes the sheet re-ask a question that was
+    /// answered for good. App-level rather than per-meeting — it is a property of
+    /// how this person works, not of one call.
+    enum LastUsed {
+        private static let key = "piko.lastExportTarget"
+
+        static var target: Target {
+            get {
+                Target(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .icsFile
+            }
+            set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
         }
     }
 
@@ -118,7 +157,7 @@ final class TaskExporter {
         let granted = switch target {
         case .reminders: try await store.requestFullAccessToReminders()
         case .calendar: try await store.requestFullAccessToEvents()
-        case .icsFile: true
+        case .icsFile, .csvFile: true
         }
         if !granted { throw ExportError.denied(target) }
     }
@@ -134,7 +173,8 @@ final class TaskExporter {
         switch target {
         case .reminders: return try sendReminders(items, from: recording)
         case .calendar: return try sendEvents(items, from: recording, context: context)
-        case .icsFile: return [:]  // written by CalendarFile — no store involved
+        // Written by CalendarFile / TaskFile — no store is involved in either.
+        case .icsFile, .csvFile: return [:]
         }
     }
 
@@ -291,6 +331,9 @@ final class TaskExporter {
         }
         if let owner = item.owner, !owner.isEmpty {
             lines.append("Owner: \(owner)")
+        }
+        if let epic = item.epic, !epic.isEmpty {
+            lines.append("Epic: \(epic)")
         }
         if let context {
             lines.append("")

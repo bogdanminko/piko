@@ -82,6 +82,16 @@ enum MeetingLibrary {
         folder(for: id).appendingPathComponent("transcript.json")
     }
 
+    /// How far a meeting got, asked of the disk rather than of any cached
+    /// state — the Library badge and the transcript card both read it.
+    static func hasTranscript(id: String) -> Bool {
+        FileManager.default.fileExists(atPath: transcriptURL(for: id).path)
+    }
+
+    static func hasSummary(id: String) -> Bool {
+        FileManager.default.fileExists(atPath: summaryURL(for: id).path)
+    }
+
     /// Playable mix, written by the backend's `finalize_recording`.
     static func mixedAudioURL(for recording: MeetingRecording) -> URL? {
         guard let file = recording.mixedFile else { return nil }

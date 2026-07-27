@@ -32,6 +32,7 @@ struct ModelsView: View {
                 HStack(alignment: .top, spacing: 16) {
                     VStack(spacing: 12) {
                         transcriptionSection
+                        speakersSection
                         SummarizerSection(summarizer: summarizer)
                         stubSection(label: "Caption timing", note: "word-level alignment",
                                     models: alignStubs)
@@ -98,7 +99,7 @@ struct ModelsView: View {
                 }
                 .padding(.bottom, 4)
 
-                ForEach(modelManager.models) { model in
+                ForEach(modelManager.asrModels) { model in
                     modelRow(model)
                 }
 
@@ -115,6 +116,91 @@ struct ModelsView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Speakers (optional)
+
+    /// A switch, not a radio button: this model does not replace anything, it
+    /// runs after transcription and only when asked. Off by default because
+    /// turning it on is what authorises the download.
+    @ViewBuilder
+    private var speakersSection: some View {
+        if let model = modelManager.speakerModel {
+            ThemedCard {
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        SectionLabel(text: "Speakers")
+                        Text("who said it")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(theme.dim)
+                        Spacer()
+                        Toggle("", isOn: $modelManager.identifiesSpeakers)
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+                    }
+                    .padding(.bottom, 4)
+
+                    Text("Your own voice is identified from the microphone track "
+                         + "without any model. This one tells the people on the "
+                         + "other side apart — up to four of them.")
+                        .font(.system(size: 11.5))
+                        .lineSpacing(2)
+                        .foregroundStyle(theme.dim)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 2)
+
+                    speakerModelRow(model)
+
+                    if modelManager.identifiesSpeakers && !model.downloaded {
+                        Text("Transcripts stay side-only until this is downloaded.")
+                            .font(.system(size: 11))
+                            .foregroundStyle(theme.dim)
+                            .padding(.top, 6)
+                    }
+                }
+            }
+        }
+    }
+
+    private func speakerModelRow(_ model: WhisperModel) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.name)
+                    .font(.system(size: 13))
+                    .foregroundStyle(theme.text)
+                Text("~\(Self.formatMb(model.ramMb)) RAM · \(model.speed.capitalized) · \(model.quality)")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(theme.dim)
+            }
+            Spacer(minLength: 8)
+
+            Text(Self.formatMb(model.sizeMb))
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(theme.dim)
+
+            if model.downloaded {
+                Button {
+                    modelToDelete = model
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.system(size: 11))
+                        .foregroundStyle(theme.dim)
+                }
+                .buttonStyle(.plain)
+                .disabled(modelManager.deletingModelId != nil || modelManager.isDownloading)
+                .help("Remove the downloaded files")
+            } else {
+                Button("Download") {
+                    Task { await modelManager.download(model.id) }
+                }
+                .buttonStyle(AccentButtonStyle())
+                .disabled(modelManager.isDownloading)
+            }
+        }
+        .padding(.vertical, 9)
+        .opacity(modelManager.identifiesSpeakers ? 1 : 0.5)
+        .overlay(alignment: .top) { Rectangle().fill(theme.line).frame(height: 1) }
     }
 
     private func modelRow(_ model: WhisperModel) -> some View {

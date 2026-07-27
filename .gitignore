@@ -13,3 +13,6 @@ __pycache__/
 
 # Xcode / SwiftPM per-user state (project builds with plain `swift build`)
 .swiftpm/
+
+# Jupyter
+.ipynb_checkpoints/

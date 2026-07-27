@@ -254,6 +254,15 @@ enum WebCalendarLink {
             case .outlookPersonal: return "Outlook (personal)"
             }
         }
+
+        /// For the badge on a row, where the full name does not fit and the
+        /// work/personal split is not what the reader is asking about.
+        var shortTitle: String {
+            switch self {
+            case .google: return "Google"
+            case .outlookWork, .outlookPersonal: return "Outlook"
+            }
+        }
     }
 
     static func url(_ service: Service,

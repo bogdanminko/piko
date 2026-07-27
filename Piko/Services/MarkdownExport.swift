@@ -39,16 +39,7 @@ enum MarkdownExport {
 
         if !summary.actionItems.isEmpty {
             lines += ["## Action items", ""]
-            lines += summary.actionItems.map { item in
-                var line = "- [\(item.isDone ? "x" : " ")] \(item.text)"
-                if let owner = item.owner, !owner.isEmpty { line += " — \(owner)" }
-                if let due = DueDate.label(item.dueDate, time: item.dueTime) {
-                    line += " — due \(due)"
-                } else if let spoken = item.due, !spoken.isEmpty {
-                    line += " — due “\(spoken)”"
-                }
-                return line + link(item, recording)
-            }
+            lines += summary.actionItems.map { task($0, recording) }
             lines.append("")
         }
 
@@ -85,18 +76,24 @@ enum MarkdownExport {
                         for recording: MeetingRecording, checkboxes: Bool = false) -> String {
         var lines = ["## \(title)", ""]
         lines += items.map { item in
-            var line = checkboxes ? "- [\(item.isDone ? "x" : " ")] \(item.text)" : "- \(item.text)"
-            if checkboxes {
-                if let owner = item.owner, !owner.isEmpty { line += " — \(owner)" }
-                if let due = DueDate.label(item.dueDate, time: item.dueTime) {
-                    line += " — due \(due)"
-                } else if let spoken = item.due, !spoken.isEmpty {
-                    line += " — due “\(spoken)”"
-                }
-            }
-            return line + link(item, recording)
+            checkboxes ? task(item, recording) : "- \(item.text)" + link(item, recording)
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// One action item: the box, the text, who owns it, when it is due and
+    /// which epic it belongs under — the same line in the document and on the
+    /// clipboard, so copying one card cannot drift from exporting the file.
+    private static func task(_ item: ComposedItem, _ recording: MeetingRecording) -> String {
+        var line = "- [\(item.isDone ? "x" : " ")] \(item.text)"
+        if let owner = item.owner?.nonEmpty { line += " — \(owner)" }
+        if let due = DueDate.label(item.dueDate, time: item.dueTime) {
+            line += " — due \(due)"
+        } else if let spoken = item.due?.nonEmpty {
+            line += " — due “\(spoken)”"
+        }
+        if let epic = item.epic?.nonEmpty { line += " — \(epic)" }
+        return line + link(item, recording)
     }
 
     /// The transcript as it reads on screen: who said it, when, and what.

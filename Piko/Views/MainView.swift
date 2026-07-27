@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// App shell from the design mockup: fixed sidebar navigation on the left,
-/// themed content pane on the right. Captions is the working vertical;
-/// Library and Meeting Summary are design previews until their backends ship.
+/// themed content pane on the right. Captions and Meeting Summary are the
+/// working verticals; Library is the history over both of them.
 struct MainView: View {
     @State private var appState = AppState()
     @State private var processor = VideoProcessorVM()
@@ -18,7 +18,7 @@ struct MainView: View {
             // Top spacing for the hidden-title-bar traffic lights is handled
             // inside the sidebar (the brand row sits beside them).
             SidebarView(appState: appState, modelManager: modelManager,
-                        history: history, processor: processor)
+                        history: history, processor: processor, meeting: meeting)
                 .background { sidebarBackground }
 
             Rectangle()
@@ -101,9 +101,11 @@ struct MainView: View {
     private var screenContent: some View {
         switch appState.screen {
         case .library:
-            LibraryView(appState: appState, processor: processor, history: history)
+            LibraryView(appState: appState, processor: processor,
+                        history: history, meeting: meeting)
         case .summary:
             MeetingSummaryView(meeting: meeting, modelId: modelManager.selectedModelId,
+                               diarize: modelManager.diarizationReady,
                                summarizer: summarizer)
         case .captions:
             CaptionsScreen(

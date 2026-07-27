@@ -27,15 +27,50 @@ from collections.abc import Callable
 VM_STAT = "/usr/bin/vm_stat"
 SYSCTL = "/usr/sbin/sysctl"
 
-# Conservative peak RSS while transcribing (weights + activations + runtime),
-# not the download size from ASR_MODELS.
+# What a model actually occupies once loaded, measured (mx.get_active_memory,
+# each model in a fresh process, loaded through the exact call the product
+# uses — bf16 for parakeet via Model.from_pretrained, fp16 for whisper via
+# ModelHolder). This is the number the Models screen shows, because "will this
+# fit on my Mac" is a question about the model, not about our worst case.
+#
+# Keep the two dicts apart. Showing MODEL_PEAK_MB was telling people Turbo
+# needs 2.8 GB when its weights are 1.6 GB — the difference between "won't fit
+# in 8 GB" and "fine", decided by a number that was never about the model.
+MODEL_WEIGHTS_MB = {
+    "mlx-community/whisper-large-v3-mlx-8bit": 1720,
+    "mlx-community/whisper-large-v3-turbo": 1614,
+    "mlx-community/parakeet-tdt-0.6b-v3": 1296,
+    "mlx-community/diar_sortformer_4spk-v1-fp16": 248,
+}
+
+# Conservative peak while transcribing (weights + activations + runtime). Used
+# only by check_memory to refuse a job that would not fit — never displayed.
+# Measured on 5 minutes of audio, same load paths; erring high is correct here,
+# since the cost of being wrong is an OOM rather than an ugly label.
 MODEL_PEAK_MB = {
-    "mlx-community/whisper-large-v3-mlx-8bit": 3000,
-    "mlx-community/whisper-large-v3-turbo": 2800,
-    # Measured (/usr/bin/time -l) at ~1.2 GB despite mlx-audio's
+    # Loading alone grew RSS by 3.6 GB — the dequantizing load path is the
+    # expensive part here, and 32 s of it. Raised from 3000 on that evidence.
+    "mlx-community/whisper-large-v3-mlx-8bit": 3600,
+    # Measured 1.9 GB RSS transcribing 5 minutes; 2800 was a guess.
+    "mlx-community/whisper-large-v3-turbo": 2200,
+    # Measured 1.26 GB RSS transcribing 5 minutes, despite mlx-audio's
     # from_pretrained loading an fp32 checkpoint before casting to bf16 —
-    # MLX's lazy evaluation never materializes both copies at once.
+    # MLX's lazy evaluation never materializes both copies at once. The public
+    # `stt.load()` would keep fp32 and cost 2.5 GB; core/parakeet_transcriber.py
+    # deliberately does not use it.
     "mlx-community/parakeet-tdt-0.6b-v3": 1500,
+    # The odd one out: a *marginal* cost, not a standalone one. Diarization only
+    # ever runs in the same process straight after transcription, so MLX and
+    # Metal are already up and the ~600 MB they cost is already on the bill.
+    # Measured that way (getrusage, parakeet loaded and used first): +279 MB for
+    # a 5-minute call. Measured alone it looks like 750 MB, but that number
+    # charges this model for the runtime the transcriber already paid for.
+    #
+    # Quantizing would not move it. A 4-bit build has a quarter of the weights
+    # (88 MB active vs 248 MB) and loads into the *same* RSS, because the cost
+    # is the loading path, not the tensors. `skills/meeting/diarize.py` records
+    # the rest of that finding.
+    "mlx-community/diar_sortformer_4spk-v1-fp16": 300,
 }
 DEFAULT_MODEL_PEAK_MB = 3000
 

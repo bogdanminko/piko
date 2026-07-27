@@ -18,17 +18,23 @@ from __future__ import annotations
 from ..memory import total_memory_mb
 from .types import ModelSpec
 
-# ram_mb is peak RSS, not download size. Only the `balanced` row is measured
-# (bench/llm/results — 4.3 GB peak on a 21k-token prompt); the other two are
-# extrapolated from it by weight-size delta and are marked below. Re-measure
-# before trusting them in a memory-tight decision.
+# ram_mb is measured peak RSS while summarizing, not download size — every row
+# below, on a 28k-token prompt (longer than a real meeting, so the figure has
+# headroom rather than needing it). Method: load through `mlx_lm.load()`, the
+# same call mlx_backend.py makes, one model per fresh process, RSS read from
+# getrusage. Resident weights alone are roughly half of each figure; the rest is
+# the KV cache the prompt forces, which is why weights are the wrong thing to
+# quote for an LLM.
+#
+# These replace estimates that ran 40-70% high and, through min_ram_mb, decided
+# whether a tier was offered at all.
 TIERS: dict[str, ModelSpec] = {
     "fast": ModelSpec(
         tier="fast",
         repo="mlx-community/Qwen3.5-2B-4bit",
         name="Qwen3.5 2B",
         size_mb=1750,
-        ram_mb=3300,  # estimated: ~1.2 GB weights + the ~1.9 GB runtime overhead measured at 4B
+        ram_mb=2000,  # measured: 1.98 GB peak RSS, of which 1.06 GB weights
         min_ram_mb=8192,
         context_tokens=262144,
     ),
@@ -37,7 +43,7 @@ TIERS: dict[str, ModelSpec] = {
         repo="mlx-community/Qwen3.5-4B-4bit",
         name="Qwen3.5 4B",
         size_mb=3060,
-        ram_mb=4400,  # measured: 4.32 GB peak at 21k prompt tokens
+        ram_mb=3300,  # measured: 3.26 GB peak RSS, of which 2.37 GB weights
         min_ram_mb=16384,
         context_tokens=262144,
     ),
@@ -46,7 +52,7 @@ TIERS: dict[str, ModelSpec] = {
         repo="mlx-community/Qwen3.5-9B-4bit",
         name="Qwen3.5 9B",
         size_mb=5980,
-        ram_mb=7800,  # estimated: ~4.6 GB weights + the runtime overhead measured at 4B
+        ram_mb=6000,  # measured: 5.96 GB peak RSS, of which 5.04 GB weights
         min_ram_mb=16384,
         context_tokens=262144,
     ),
@@ -55,7 +61,7 @@ TIERS: dict[str, ModelSpec] = {
         repo="mlx-community/gpt-oss-20b-MXFP4-Q8",
         name="GPT-OSS 20B",
         size_mb=12100,
-        ram_mb=14500,  # estimated from weight size; never measured
+        ram_mb=14500,  # STILL AN ESTIMATE — not on disk here, 12 GB to fetch
         min_ram_mb=24576,
         context_tokens=131072,
     ),
