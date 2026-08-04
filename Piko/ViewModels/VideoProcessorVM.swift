@@ -19,9 +19,28 @@ class VideoProcessorVM {
     var progressMessage: String = ""
     var outputURL: URL?
     var subtitleURL: URL?
+    /// Unstyled subtitle files. Written by every render, including the
+    /// subtitle-only one that runs the moment a transcript exists, so the
+    /// cheapest export never waits behind an encode.
+    var srtURL: URL?
+    var vttURL: URL?
     var detectedLanguage: String?
     var wordCount: Int = 0
     var keywordsFound: Int = 0
+
+    /// The transcript as shown and corrected. Nil until the first pass.
+    var transcript: CaptionTranscript?
+    /// Corrections, stored per source video and composed into the copy the
+    /// renderer reads. Never written back into the cached transcription.
+    /// Maintained by VideoProcessorVM+Transcript.
+    var edits: CaptionEdits = .empty
+    /// Corrections that no longer match any line after a re-transcription.
+    /// Kept in the file and reported rather than dropped.
+    var unplacedEdits: Int = 0
+
+    /// The run in flight, so it can be cancelled. Cancelling the task ends
+    /// the backend stream, which terminates the Python process with it.
+    private var runTask: Task<Void, Never>?
 
     /// Fired every time a render completes (including instant cache swaps);
     /// the shell uses it to update the session history.
@@ -40,27 +59,11 @@ class VideoProcessorVM {
     private(set) var processedMediaSeconds: Double?
     private(set) var totalMediaSeconds: Double?
 
-    var processingSeconds: Double? {
-        guard let started = runStartedAt, let finished = runFinishedAt else { return nil }
-        return finished.timeIntervalSince(started)
-    }
-
-    /// Words transcribed per second of processing.
-    var wordsPerSecond: Double? {
-        guard let secs = processingSeconds, secs > 0, wordCount > 0 else { return nil }
-        return Double(wordCount) / secs
-    }
-
-    /// The standard ASR speed metric: audio duration / processing time
-    /// ("2.4× realtime").
-    var realtimeFactor: Double? {
-        guard let secs = processingSeconds, secs > 0, mediaDuration > 0 else { return nil }
-        return mediaDuration / secs
-    }
+    // Derived figures live in VideoProcessorVM+Metrics.
 
     /// Path of the cached transcription JSON; set after the first (slow)
     /// pass so style changes only need a fast re-render.
-    private(set) var transcriptionPath: String?
+    var transcriptionPath: String?
 
     /// Finished renders for this video, keyed by output path (one per
     /// style/mode/color combination) — switching back is instant.
@@ -83,84 +86,13 @@ class VideoProcessorVM {
         .homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Caches/piko")
 
-    private var rendersDir: URL {
+    var rendersDir: URL {
         Self.cacheDir.appendingPathComponent("renders")
     }
 
-    /// Copy the rendered video out of the cache to a user-chosen location.
-    func saveVideo() {
-        guard let outputURL, let videoURL else { return }
-        exportFile(
-            from: outputURL,
-            suggestedName: videoURL.deletingPathExtension().lastPathComponent + "_subtitled.mp4"
-        )
-    }
-
-    /// Copy the generated .ass subtitle file to a user-chosen location.
-    func saveSubtitles() {
-        guard let subtitleURL, let videoURL else { return }
-        exportFile(
-            from: subtitleURL,
-            suggestedName: videoURL.deletingPathExtension().lastPathComponent + ".ass"
-        )
-    }
-
-    private func exportFile(from source: URL, suggestedName: String) {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = suggestedName
-        panel.canCreateDirectories = true
-
-        guard panel.runModal() == .OK, let dest = panel.url else { return }
-        do {
-            if FileManager.default.fileExists(atPath: dest.path) {
-                try FileManager.default.removeItem(at: dest)
-            }
-            try FileManager.default.copyItem(at: source, to: dest)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Could not save file"
-            alert.informativeText = error.localizedDescription
-            alert.alertStyle = .warning
-            alert.runModal()
-        }
-    }
-
-    // --- Cache management ---
-
-    /// Total size of the app cache (transcriptions, renders, emoji, previews).
-    static func cacheSizeDescription() -> String {
-        let fm = FileManager.default
-        var total: Int64 = 0
-        if let enumerator = fm.enumerator(at: cacheDir,
-                                          includingPropertiesForKeys: [.totalFileAllocatedSizeKey]) {
-            for case let file as URL in enumerator {
-                let size = (try? file.resourceValues(forKeys: [.totalFileAllocatedSizeKey]))?
-                    .totalFileAllocatedSize ?? 0
-                total += Int64(size)
-            }
-        }
-        return ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
-    }
-
-    /// Wipe the whole app cache. Unsaved renders and cached transcriptions
-    /// are gone after this, so the session falls back to the pre-render state.
-    func clearCache() {
-        let fm = FileManager.default
-        if let items = try? fm.contentsOfDirectory(at: Self.cacheDir,
-                                                   includingPropertiesForKeys: nil) {
-            for item in items {
-                try? fm.removeItem(at: item)
-            }
-        }
-        renderCache = [:]
-        transcriptionPath = nil
-        outputURL = nil
-        subtitleURL = nil
-        UserDefaults.standard.removeObject(forKey: Self.renderMetaKey)
-        if case .done = state {
-            state = .idle
-        }
-    }
+    // Saving out to the user's own disk lives in VideoProcessorVM+Export,
+    // reading and correcting the words in VideoProcessorVM+Transcript, and
+    // everything about the cache in VideoProcessorVM+RenderDiskCache.
 
     var hasVideo: Bool { videoURL != nil }
     var isProcessing: Bool {
@@ -168,6 +100,7 @@ class VideoProcessorVM {
         return false
     }
     var canReRender: Bool { transcriptionPath != nil && videoURL != nil }
+    var hasTranscript: Bool { transcript != nil }
 
     func handleDrop(providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
@@ -202,11 +135,63 @@ class VideoProcessorVM {
         videoURL = url
         state = .idle
         transcriptionPath = nil
+        transcript = nil
+        srtURL = nil
+        vttURL = nil
         renderCache = [:]
+        edits = CaptionEdits.load(forVideoAt: url.path)
+        unplacedEdits = 0
     }
 
-    /// Full pipeline: transcribe (slow, cached by backend) then render.
-    func processVideo(modelId: String) async {
+    // MARK: - Running
+
+    /// Start the transcription pass. Owned by the view model rather than the
+    /// caller's task so that Cancel has something to cancel.
+    func start(modelId: String) {
+        runTask?.cancel()
+        runTask = Task { [weak self] in await self?.transcribeThenOfferExports(modelId: modelId) }
+    }
+
+    /// Stop whatever is running. Ending the stream terminates the Python
+    /// process (BackendService hangs that off `continuation.onTermination`),
+    /// so an hour-long file no longer has to be escaped by quitting the app.
+    func cancel() {
+        runTask?.cancel()
+        runTask = nil
+        progressPercent = 0
+        progressMessage = ""
+        processedMediaSeconds = nil
+        totalMediaSeconds = nil
+        state = hasTranscript ? .transcribed : .idle
+    }
+
+    /// Burn the captions into the video — the one step that costs a full
+    /// re-encode, and therefore the one step the user asks for explicitly.
+    func burn() {
+        run {
+            await $0.render(progressBase: 0, progressSpan: 100)
+            $0.runFinishedAt = Date()
+        }
+    }
+
+    /// Transcribe, show the words, and produce every export that costs
+    /// nothing. The burn deliberately does not follow: dropping a file used
+    /// to spend a full re-encode before the user had seen a single word.
+    private func transcribeThenOfferExports(modelId: String) async {
+        await transcribe(modelId: modelId)
+        guard !Task.isCancelled, transcriptionPath != nil else { return }
+
+        loadTranscript()
+        // Subtitle-only: ffprobe plus three small files, no encoder. This is
+        // what makes .srt reachable without first burning a video.
+        await render(progressBase: 0, progressSpan: 100, subtitleOnly: true)
+        guard !Task.isCancelled else { return }
+
+        runFinishedAt = Date()
+        state = .transcribed
+    }
+
+    private func transcribe(modelId: String) async {
         guard let videoURL else { return }
 
         state = .processing(stage: "starting", percent: 0, message: "Starting...")
@@ -216,7 +201,6 @@ class VideoProcessorVM {
         totalMediaSeconds = nil
         mediaDuration = (try? await AVURLAsset(url: videoURL).load(.duration).seconds) ?? 0
 
-        // Stage 1: transcription — mapped to 0...70% of overall progress.
         let params: [String: Any] = [
             "video_path": videoURL.path,
             "model": modelId
@@ -250,39 +234,11 @@ class VideoProcessorVM {
             }
         }
 
-        // transcriptionPath is nil'd on video change and only set by a
-        // successful transcribe result above.
-        guard transcriptionPath != nil else { return }
-
-        // Stage 2: render — mapped to 70...100%.
-        await render(progressBase: 70, progressSpan: 30)
-
-        if case .done = state {
-            runFinishedAt = Date()
-        }
     }
 
-    /// Re-render with the current style using the cached transcription.
-    /// Output-path suffix encodes every setting that affects the result,
-    /// so each combination gets its own file and cache slot.
-    private func renderSuffix(style: String) -> String {
-        var suffix = "_subtitled_\(style)"
-        if wordMode != .static {
-            suffix += "_\(wordMode.rawValue)"
-            if wordMode == .highlight {
-                suffix += "_\(highlightColorHex.dropFirst().lowercased())"
-            }
-        }
-        if brollEnabled {
-            suffix += "_broll"
-        }
-        return suffix
-    }
-
-    /// Called when the user switches style after a completed run.
-    func reRender() async {
-        guard canReRender, !isProcessing else { return }
-        await render(progressBase: 0, progressSpan: 100)
+    /// Called when the user switches style after a completed burn.
+    func reRender() {
+        run { await $0.render(progressBase: 0, progressSpan: 100) }
     }
 
     /// Bypasses the render cache and asks the backend to redo the current
@@ -290,13 +246,33 @@ class VideoProcessorVM {
     /// broll on-off), not on the b-roll library's contents — so adding or
     /// changing clips after a render already exists at that path wouldn't
     /// otherwise be picked up until the source video's mtime changes.
-    func forceRerender() async {
-        guard canReRender, !isProcessing else { return }
-        await render(progressBase: 0, progressSpan: 100, force: true)
+    func forceRerender() {
+        run { await $0.render(progressBase: 0, progressSpan: 100, force: true) }
     }
 
-    private func render(progressBase: Double, progressSpan: Double, force: Bool = false) async {
-        guard let videoURL, let transcriptionPath else { return }
+    /// Step back from a finished burn to the words, without redoing anything.
+    func showTranscript() {
+        guard hasTranscript else { return }
+        state = .transcribed
+    }
+
+    /// Every burn goes through here so that Cancel has one thing to cancel.
+    private func run(_ body: @escaping (VideoProcessorVM) async -> Void) {
+        guard canReRender, !isProcessing else { return }
+        runTask?.cancel()
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            await body(self)
+        }
+    }
+
+    private func render(
+        progressBase: Double,
+        progressSpan: Double,
+        force: Bool = false,
+        subtitleOnly: Bool = false
+    ) async {
+        guard let videoURL, let transcriptionPath = transcriptionPathForRender() else { return }
 
         let style = selectedStyle.rawValue
         let baseName = videoURL.deletingPathExtension().lastPathComponent
@@ -308,13 +284,18 @@ class VideoProcessorVM {
         // The output path encodes every setting, so a file on disk from a
         // previous session is just as good as this session's cache (the
         // .ass sits next to it; mtime check guards against edited sources).
-        if !force, serveFromCache(outputPath: outputPath, subtitlePath: subtitlePath, source: videoURL) {
+        if !force, !subtitleOnly,
+           serveFromCache(outputPath: outputPath, subtitlePath: subtitlePath, source: videoURL) {
             return
         }
 
-        state = .processing(stage: "rendering",
-                            percent: progressBase,
-                            message: "Rendering \(selectedStyle.displayName) subtitles...")
+        state = .processing(
+            stage: subtitleOnly ? "subtitles" : "rendering",
+            percent: progressBase,
+            message: subtitleOnly
+                ? "Preparing subtitle files..."
+                : "Burning \(selectedStyle.displayName) subtitles..."
+        )
 
         let params: [String: Any] = [
             "video_path": videoURL.path,
@@ -323,44 +304,19 @@ class VideoProcessorVM {
             "output_path": outputPath,
             "word_mode": wordMode.rawValue,
             "highlight_color": highlightColorHex,
-            "broll": brollEnabled
+            "broll": brollEnabled,
+            "subtitle_only": subtitleOnly
         ]
 
         for await message in await backend.execute(command: "render", params: params) {
             await MainActor.run {
                 switch message.type {
                 case "progress":
-                    let raw = message.percent ?? 0
-                    let pct = progressBase + raw / 100 * progressSpan
-                    let msg = message.message ?? ""
-                    state = .processing(stage: message.stage ?? "", percent: pct, message: msg)
-                    progressPercent = pct
-                    progressMessage = msg
-                    if let processed = message.processedSeconds {
-                        processedMediaSeconds = processed
-                        totalMediaSeconds = message.totalSeconds ?? totalMediaSeconds
-                    }
-
+                    applyProgress(message, base: progressBase, span: progressSpan)
                 case "result" where message.success == true:
-                    if let outPath = message.outputPath, let subPath = message.subtitlePath {
-                        outputURL = URL(fileURLWithPath: outPath)
-                        subtitleURL = URL(fileURLWithPath: subPath)
-                        if let lang = message.language { detectedLanguage = lang }
-                        wordCount = message.wordCount ?? wordCount
-                        keywordsFound = message.keywordsFound ?? 0
-                        renderCache[outPath] = RenderResult(
-                            outputPath: outPath,
-                            subtitlePath: subPath,
-                            keywordsFound: message.keywordsFound ?? 0
-                        )
-                        Self.rememberKeywords(message.keywordsFound ?? 0, for: outPath)
-                        state = .done(outputPath: outPath, subtitlePath: subPath)
-                        onRenderCompleted?()
-                    }
-
+                    applyRenderResult(message)
                 case "error":
                     state = .error(message: message.message ?? "Unknown error")
-
                 default:
                     break
                 }
@@ -368,12 +324,54 @@ class VideoProcessorVM {
         }
     }
 
+    private func applyProgress(_ message: BackendMessage, base: Double, span: Double) {
+        let pct = base + (message.percent ?? 0) / 100 * span
+        let msg = message.message ?? ""
+        state = .processing(stage: message.stage ?? "", percent: pct, message: msg)
+        progressPercent = pct
+        progressMessage = msg
+        if let processed = message.processedSeconds {
+            processedMediaSeconds = processed
+            totalMediaSeconds = message.totalSeconds ?? totalMediaSeconds
+        }
+    }
+
+    private func applyRenderResult(_ message: BackendMessage) {
+        // The free exports come back from both kinds of render; the video
+        // only from a burn. A subtitle-only pass therefore leaves the state
+        // alone rather than claiming a file it never wrote.
+        if let sub = message.subtitlePath { subtitleURL = URL(fileURLWithPath: sub) }
+        if let srt = message.srtPath { srtURL = URL(fileURLWithPath: srt) }
+        if let vtt = message.vttPath { vttURL = URL(fileURLWithPath: vtt) }
+        if let lang = message.language { detectedLanguage = lang }
+        wordCount = message.wordCount ?? wordCount
+
+        guard let outPath = message.outputPath, let subPath = message.subtitlePath else { return }
+        outputURL = URL(fileURLWithPath: outPath)
+        keywordsFound = message.keywordsFound ?? 0
+        renderCache[outPath] = RenderResult(
+            outputPath: outPath,
+            subtitlePath: subPath,
+            keywordsFound: keywordsFound
+        )
+        Self.rememberKeywords(keywordsFound, for: outPath)
+        state = .done(outputPath: outPath, subtitlePath: subPath)
+        onRenderCompleted?()
+    }
+
     func reset() {
+        runTask?.cancel()
+        runTask = nil
         videoURL = nil
         state = .idle
         outputURL = nil
         subtitleURL = nil
+        srtURL = nil
+        vttURL = nil
         transcriptionPath = nil
+        transcript = nil
+        edits = .empty
+        unplacedEdits = 0
         renderCache = [:]
         progressPercent = 0
         progressMessage = ""

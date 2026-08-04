@@ -77,12 +77,32 @@ struct ComingSoonBadge: View {
 struct ScreenHeader<Accessory: View>: View {
     let title: String
     var subtitle: String?
+    /// Way out of the artifact the workspace is showing. Present on every
+    /// screen you can arrive at by opening something — without it, choosing
+    /// the wrong file, or changing your mind, is a dead end.
+    var onBack: (() -> Void)?
+    /// Why the way out is currently shut, if it is. Nil means it is open.
+    var backBlockedReason: String?
     @ViewBuilder var accessory: Accessory
     @Environment(\.pikoTheme) private var theme
 
     var body: some View {
         VStack(spacing: 16) {
             HStack(alignment: .center, spacing: 20) {
+                if let onBack {
+                    Button(action: onBack) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(backBlockedReason == nil ? theme.text : theme.dim)
+                            .frame(width: 26, height: 26)
+                            .background {
+                                RoundedRectangle(cornerRadius: 7).fill(theme.card2)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(backBlockedReason != nil)
+                    .help(backBlockedReason ?? "Back to the workspace")
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(title)
                         .font(.system(size: 22, weight: .semibold))
@@ -102,14 +122,37 @@ struct ScreenHeader<Accessory: View>: View {
 }
 
 /// Timecode chip in the mockup's mono accent style.
+///
+/// Clickable wherever a player is open, which is what turns "every line links
+/// back to the second it was said" from a claim into something you can check.
+/// Plain text when there is nothing to play — an affordance that does nothing
+/// is worse than no affordance.
 struct Timecode: View {
     let text: String
+    /// Where this timecode points, in seconds. Nil for the ones that are only
+    /// a duration ("02:14 long"), which are not places.
+    var seconds: Double?
     @Environment(\.pikoTheme) private var theme
+    @Environment(\.seekToTime) private var seek
+    @State private var isHovered = false
 
     var body: some View {
+        if let seconds, let seek {
+            Button { seek(seconds) } label: { label }
+                .buttonStyle(.plain)
+                .onHover { isHovered = $0 }
+                .help("Play from \(text)")
+        } else {
+            label
+        }
+    }
+
+    private var label: some View {
         Text(text)
             .font(.system(size: 11, design: .monospaced))
             .foregroundStyle(theme.accent)
+            .underline(isHovered)
+            .contentShape(Rectangle())
     }
 }
 

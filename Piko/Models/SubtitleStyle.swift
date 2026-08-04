@@ -53,6 +53,13 @@ enum SubtitleStyleType: String, CaseIterable, Identifiable {
         }
     }
 
+    /// TikTok and Karaoke animate words themselves and ignore `word_mode`
+    /// entirely (see `styles/base.py`), so the control is theirs to disable.
+    /// On the model rather than in a view because two screens now ask.
+    var supportsWordMode: Bool {
+        ![.tiktok, .karaoke].contains(self)
+    }
+
     var description: String {
         switch self {
         case .mrbeast: "Bold Impact font, yellow keywords, thick outline"

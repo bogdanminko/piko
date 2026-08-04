@@ -42,6 +42,11 @@ echo '{"command":"list_models"}' | uv run python -m piko.main
 # Build + bundle + sign the app (SPM release build → build/Piko.app)
 ./scripts/make-app.sh
 open build/Piko.app
+# ...but once a copy is installed, the script *moves* the bundle there rather
+# than leaving a second one behind (a stale duplicate is free to answer a
+# piko:// link), so build/Piko.app is gone and the script prints the real
+# command instead:
+open -a /Applications/Piko.app
 
 # Swift compile check only
 swift build
@@ -92,7 +97,9 @@ New skills (e.g. meeting summary) get their own `skills/<name>/` package and reu
 
 ### JSON protocol (the seam between Swift and Python)
 
-Each command = one short-lived Python process. Swift writes one JSON command to stdin; Python emits newline-delimited JSON messages (`progress` / `result` / `error` / `models`) to stdout. **stdout is protocol-only** — mlx-whisper's prints are redirected to stderr in `core/transcriber.py`; never `print()` to stdout in the backend. Message schema lives in `src/piko/commands/` (emit sites) and `Piko/Models/BackendMessage.swift` (one big optional-field struct; keep the two in sync + CodingKeys for snake_case).
+Each command = one short-lived Python process — **except the ones whose cost is
+the model**, which share one resident process (see "The model stays loaded").
+Swift writes one JSON command to stdin; Python emits newline-delimited JSON messages (`progress` / `result` / `error` / `models`) to stdout. **stdout is protocol-only** — mlx-whisper's prints are redirected to stderr in `core/transcriber.py`; never `print()` to stdout in the backend. Message schema lives in `src/piko/commands/` (emit sites) and `Piko/Models/BackendMessage.swift` (one big optional-field struct; keep the two in sync + CodingKeys for snake_case).
 
 Commands: `process` (full pipeline, CLI convenience), `transcribe` (slow, cached), `render` (fast, repeatable), `finalize_recording`, `import_recording`, `transcribe_meeting`, `summarize_meeting`, `style_previews`, `list_models`, `download_model`, `check_model`.
 
@@ -103,7 +110,41 @@ Transcription is decoupled from rendering so style/animation changes never re-ru
 1. `transcribe` → cached JSON in `~/Library/Caches/piko/transcriptions/<sha1(path+mtime+model+lang)>.json`; returns `transcription_path`.
 2. `render` → takes `transcription_path` + style + word_mode + highlight_color, generates .ass, burns with ffmpeg (~sub-second for short clips).
 
-The Swift `VideoProcessorVM` additionally keeps a per-session render cache keyed by output path (which encodes style+mode+color), so switching back to an already-rendered combination swaps files instantly without calling the backend. The app never writes next to the user's video: renders and .ass files go to `~/Library/Caches/piko/renders/`, and the user exports explicitly via the Save Video… / Save Subtitles… buttons (NSSavePanel + copy). The sidebar's "Clear Cache" button wipes the whole `~/Library/Caches/piko` directory (style previews regenerate on the next `style_previews` call). The `piko_output/` default in `commands/render.py` only applies to CLI use without an explicit `output_path`.
+The Swift `VideoProcessorVM` additionally keeps a per-session render cache keyed by output path (which encodes style+mode+color+edits), so switching back to an already-rendered combination swaps files instantly without calling the backend. The app never writes next to the user's video: renders and .ass files go to `~/Library/Caches/piko/renders/`, and the user exports explicitly (NSSavePanel + copy). The sidebar's "Clear Cache" button wipes the whole `~/Library/Caches/piko` directory (style previews regenerate on the next `style_previews` call). The `piko_output/` default in `commands/render.py` only applies to CLI use without an explicit `output_path`.
+
+**The burn is asked for, never assumed.** Dropping a file starts the
+transcription and stops there (`ProcessingState.transcribed`): parakeet runs
+around 190× realtime, so the words are on screen in seconds, while the burn is
+a full re-encode of the whole video. Spending that before the user has read a
+single word meant a misheard name could not be caught until after the expensive
+part — and could not be fixed at all. Reaching `.transcribed` also fires one
+`subtitle_only` render (ffprobe plus three small files, no encoder), so `.srt`,
+`.vtt` and `.ass` exist immediately: the cheapest rung of the export ladder must
+never sit behind the dearest. `.srt` is what every platform and editor reads;
+`.ass` is the only one that carries the look, and the button that said
+"Export .srt…" used to hand over an `.ass`.
+
+**Corrections are an overlay, not an edit** (`Piko/Models/CaptionEdits.swift`,
+`CaptionTranscript.swift`). The cached transcription stays exactly as the model
+wrote it; a corrected line goes into
+`~/Library/Application Support/Piko/CaptionEdits/<sha256(video path)>.json`,
+and `CaptionTranscriptComposer` writes the *composition* of the two to a
+`.edited.json` beside the cache entry, which is what `transcription_path`
+points at for that render. Same arrangement as `SummaryEdits` /
+`ComposedSummary` and for the same reason: re-transcribing must not be able to
+destroy typed text. Application Support rather than Caches, so "Clear Cache"
+cannot take it either. Edits re-attach by anchor (|Δstart| ≤ 3 s, ≥ 0.5 word
+overlap with what the model originally said); what does not re-attach stays in
+the file, unapplied and counted in the header, rather than being dropped. The
+edit unit is the line — nobody clicks a word to fix a name, they retype the
+sentence — and a same-length rewrite keeps every original per-word key
+(including `probability`, which keyword detection reads), while a different
+length re-times its words across the line's own span. Typing back exactly what
+was generated drops the override instead of storing a copy of it.
+
+Long runs are cancellable: `VideoProcessorVM` owns the task, and ending the
+stream terminates the Python process through `continuation.onTermination` in
+`BackendService`.
 
 ### Meeting recording (Swift capture → speaker-labelled transcript)
 
@@ -152,10 +193,222 @@ of a guessed "You".
 `start`/`end`/`speaker`/`text`/`speaker_confidence`) is the seam the
 summarization step consumes — it should read that file, not the audio.
 
+**The sample rate comes from the buffers, not from the engine.**
+`AVAudioEngine.inputNode.outputFormat(forBus:)` read before `engine.start()`
+reports 48 kHz whatever the device does, and AirPods on a call run their
+microphone at 16 or 24 kHz. Believing the engine made `PCMTrackWriter` resample
+48→16 on audio that was already 16: a third of the frames written, and the drain
+loop's silence padding dutifully made up the deficit against the wall clock. The
+file came out exactly the right length — 49 minutes — with every voice three
+times too fast and the gaps filled with quiet. Padding is what turned a wrong
+rate into a *plausible* file, which is why it is the more dangerous half of that
+pair. `MicrophoneCapture` installs its tap with a `nil` format and reports the
+rate off the first buffer that disagrees (`onSampleRateChanged`); a buffer
+carries its own format and is the only account that cannot be wrong.
+
 **Permissions** live in `RecordingPermissions`. Microphone has a real API;
 system audio has none — a tap without the grant "succeeds" and returns silence
 forever, so the check is empirical: start a tap, play a short sound, see if the
 tap heard it. That same first tap creation is what raises the macOS dialog.
+
+### The workspace: one entrance, one artifact
+
+`ARCHITECTURE.md` says `Input → Artifact → Skill → Model → Result → Export`,
+and the UI used not to implement it: Captions and Meeting Summary were sibling
+tabs, so the app asked what kind of work this was *before* anything had looked
+at the file. The same mp4 was "a video needing subtitles" in one tab and "a
+call needing a summary" in the other. Two entrances is what made one product
+read as two, and it is what forces a captions vertical to grow its own editor.
+
+There is now one working screen, `ArtifactScreen`, and the app opens on it.
+`AppScreen` is `artifact / library / models / appearance`; which artifact is
+open is `AppState.focus` (`none / meeting / video`), and **everything that
+opens something goes through `AppState.show(_:)`** — Library, Recent, a
+`piko://` link, a drop, starting a recording. Library is history, not a way in.
+
+**Switching reading does not re-transcribe.** The two halves hand the ASR
+cache different files — captions transcribe the video itself, a meeting
+transcribes the `meeting.m4a` extracted from it — so the same speech missed
+the cache and paid for a second full pass. "Summarise as a Call" therefore
+carries the transcription it already has (`transcribe_meeting`'s
+`transcription_path` → `_reuse_transcription`), and the meeting is built from
+those segments without touching the model. Strictly a reuse: a missing or
+unreadable file falls through to transcribing properly, and `force` outranks
+it, since `force` exists for a transcript that came out wrong. Attribution
+loses nothing — an import has no side tracks, so every segment was `unknown`
+either way.
+
+**The pipeline is read off the file, not asked for** (`ArtifactRouting`): no
+picture → a call; a picture but longer than ten minutes → a call (a screen
+share is a conversation that happens to have video); otherwise a clip to
+caption. Both signals are metadata, so the guess is free. It is never hidden:
+the video header carries "Summarise as a Call", so being wrong costs one click
+instead of a re-drop. The reverse direction is deliberately absent — an
+imported meeting keeps only extracted audio (`-vn`), so there is no picture
+left to burn into.
+
+**The empty workspace explains itself, in the shape people already know.**
+`WorkspaceChatView` + `WorkspaceChatVM` put a conversation beside the drop
+card. Three rules keep it from becoming a chatbot, which `PRODUCT.md` rules
+out: the composer is **locked** until the user has asked the one question
+offered to them ("What can you do?") — an empty box in front of someone who
+does not yet know what the app does invites exactly the request it cannot
+honour; the first answer is **written, not generated**, and typed out at
+reading speed (`WorkspaceChatVM.capabilities`); and the seconds that takes are
+the seconds the local model spends becoming resident, because asking fires
+`SummarizerVM.warmup()`. Every later question goes to the model through the
+`chat` command, which streams `{"type": "chat", "delta": …}` tokens.
+
+**The work happens in the thread, not on another screen.** Handing a file to
+the workspace changes nothing about where you are: the file appears as a chip,
+the pipeline starts behind it, and its progress, transcript and exports render
+as live cards *in the conversation* (`ChatWorkCards.swift`, marked by
+`ChatTurn.Payload`). The cards hold no state — each reads the view model that
+is actually running, so a card from four minutes ago still shows the truth
+rather than a snapshot. A chat that collects a file and then throws you onto a
+different screen has made itself a lobby.
+
+**A session owns its artifacts** (`Piko/ViewModels/ChatSession.swift`). The app
+had exactly one `WorkspaceChatVM` and one `VideoProcessorVM`, which means it had
+one session pretending to be many: open a recording from history and its
+artifacts joined whatever conversation happened to be on screen, because there
+was nowhere else for them to be. A thread and the things it produced are the
+same object, so `ChatSession` holds the chat, the captions run, which recording
+it is about and where the reader had the panel; `SessionStore` holds the list
+and `current`. `MeetingVM` is deliberately *not* per session — one recorder and
+one folder of recordings on this Mac make the library app-level — so a session
+stores the recording's id and `MainView.syncMeeting()` selects it on the way in,
+writing back through `onChange(of: meeting.selectedID)`.
+
+Two rules keep the bleed out. A file handed to a session that has already done
+work opens a **new** session rather than landing on top (`ArtifactRouting.open`),
+and anything opened from history opens **its own** session — the one already
+holding it if there is one (`session(holdingMeeting:)` / `holdingVideo:`),
+otherwise a fresh one. Reaching into the Library must not change what the thread
+you were reading is about. Sessions are in memory only for now: every artifact
+they point at is already on disk and in the Library, so a quit costs the wording
+around the work and not the work.
+
+The sidebar lists **chats**, not artifacts. Recent used to list recordings and
+captioned videos, which made it a second Library and left the conversation you
+were actually in unnamed and unreachable — which is why the workspace header
+needed a "Reopen" pill at all. With the chats listed, going back is where going
+anywhere already is, and the pill is gone. "New session" is a button, not a
+menu: asking *what kind of work is this* before you have a file in hand is the
+entrance the workspace was built to remove.
+
+**The workspace is always the conversation.** `ArtifactScreen` used to switch
+on `AppState.focus` and render a module screen — drop a video and you were on a
+transcriber, open a call from Library and you were on a summary page. That is
+how one product went back to reading as several, and it made `focus` two things
+at once: which pipeline a file belongs to, and which screen you are looking at.
+It is only the first now. `show(_:)` loads an artifact into the session and
+never navigates; every entrance (drop, Choose File…, a slash command, the
+sidebar's New menu, Recent, Library, `piko://`) goes through
+`ArtifactRouting.open(_:as:into:)`, which also puts the file in the thread as a
+chip — a file that arrives from the sidebar and is never mentioned in the
+conversation is a file the session does not know it has. `as:` overrides the
+metadata guess, which is what keeps `/captions` on the captions pipeline: the
+guess reads anything over ten minutes as a call, right for a drop and wrong for
+an order.
+
+**The modules are what the panel expands into.** `ArtifactSidePanel` has two
+sizes. Docked, it is the compact reading — transcript, summary, result.
+Expanded (the ⤢ in its header) it takes the whole pane and renders
+`CaptionsScreen` or `MeetingSummaryView` in full, header and settings rail and
+recordings list included, with one strip above it back to the conversation.
+Those screens were the app before the workspace was and the work in them is
+real; what was wrong was *arriving* at them instead of at the session. As the
+far end of one panel they are what a reader asked for rather than where a file
+was sent.
+
+**A result is a card in the thread; the card opens it beside the thread.**
+Two kinds of thing land in a conversation and they are not the same kind. A run
+in progress and a choice being offered are *moments* — `ChatJobCard`,
+`ChatStyleCard`, `ChatBurnProgressCard` render inline at full size, because
+that is what the conversation is about right now. A finished result is an
+**artifact** (`WorkspaceArtifact`): it gets an `ArtifactCard` — icon, name, one
+line of "how big is it" — and clicking it opens the real thing in
+`ArtifactSidePanel` to the right of the chat. Four hundred transcript lines in
+a bubble is how a chat stops being one.
+
+The panel that preceded this was **docked** under the messages, and that was
+the mistake. A permanent second region in the same column is a split window
+wearing a message's clothes: the conversation and the artifact both wanted
+height, `VStack` split the shortfall between them, and each ended up showing a
+line and a half — for a call, a transcript *and* a summary stacked inside that
+same squeezed box. The panel is now a side pane that **closes**, and closing it
+gives the full width back to the chat. It shows one artifact at a time, chosen
+either from the card that announced it or from the rail of everything the
+session has made, and each artifact renders the view that already existed for
+it (`TranscriptView`, `ChatResultCard`, `ChatMeetingTranscriptCard`,
+`MeetingSummaryColumn`). The available list is *derived* from the view models
+on every pass, same rule as the Library: a cancelled burn or a reset cannot
+leave a card pointing at nothing. Nothing navigates — styling, burning, playing
+the result, summarising a call, recording one (`RecordingBar` appears in the
+workspace) all still happen here.
+
+**Long lists are `LazyVStack`, without exception.** An hour-long call is
+several hundred segments of wrapped text; a plain `VStack` lays out every one
+of them on every pass to put five on screen. That is main-thread layout, not
+compute, so it reads as a stuttering scroll on an idle machine — which is
+exactly how it was reported. The same rule is why the thread's auto-scroll
+animates on a new turn and not on a landing token: animating to the same anchor
+thirty times a second is an animation fighting itself.
+
+**Most of what is typed needs no model.** "Summarise this" after a drop is a
+button somebody typed; sending it to an LLM spends seconds to produce a
+paragraph explaining how to press that button. `WorkspaceChatVM.Intent` matches
+a short list (summarise / subtitles / burn / captions, EN+RU stems) and runs
+the thing, which also works with no model downloaded and cannot hallucinate.
+Everything unmatched still goes to the model, and the model is told what is
+loaded (`context` on the `chat` command) — without that it tells people to drop
+a file they dropped a minute ago.
+
+What is *not* faked: the design called for transcript lines appearing as they
+are recognised. The ASR reports percentages, not text, so the transcript card
+appears when the pass finishes and is labelled accordingly. Showing a step
+panel with invented lines would be decoration wearing the clothes of a feature.
+
+**The conversation is the drop target.** A file dropped into it — or picked
+with the paperclip — appears as a chip in a turn of its own, is acknowledged in
+writing, and opens as an artifact a beat later (long enough that the chip is
+seen; routing itself only reads metadata). There is deliberately no separate
+drop panel beside the chat: a chat that says "drop the file here" and then does
+not take it is the one thing an assistant must never do, and that is exactly
+what the side panel made the model into. The capability sheet now states that
+files arrive this way, so the model saying so is a fact rather than a
+hallucination. This is also the difference worth having — a cloud assistant
+given an mp4 can only offer to read a transcript you produce elsewhere.
+
+Both answers come from one capability sheet, and that is the whole point:
+`CAPABILITIES` in `src/piko/commands/chat.py` is the system prompt, it lists
+only shipped features, and it names the things Piko cannot do so the model
+refuses them instead of inventing them. Add to it when a skill ships, never
+when one is planned — a local assistant confidently promising a feature is
+worse than one that says no. Slash commands (`ChatCommand.all`) mirror
+`COMMAND_SHEET` in the same file, and each one *does* the thing rather than
+describing it.
+
+**Every screen you can arrive at has a way out.** The workspace header carries
+a back chevron to the empty workspace (`ScreenHeader.onBack`), shut with a
+stated reason while a recording or a run is in flight — Stop and Cancel live on
+those screens and nowhere else, so leaving would strand them. The sidebar's New
+menu (`+` beside the Workspace label, and on the collapsed rail) is the same
+escape from anywhere at all: Record a Call, Open a File…, Empty Workspace. It is
+a menu rather than a bare `+` because a plus would have to guess which of the
+two was meant. Backing out discards nothing, so the empty workspace offers
+"Back to <name>" for whatever is still loaded.
+
+Navigation no longer sweeps state. The old Captions tab reset itself whenever
+you left it, which was defensible when a screen was a mode; in a workspace the
+open artifact *is* the state, and a walk to Library and back must not discard a
+finished render or an uncommitted correction.
+
+`TranscriptView` is built from the same pieces as the meeting transcript —
+`ThemedCard`, `SectionLabel`, `Timecode`, hairline-separated rows, the same
+type sizes — because it is the same thing on screen. Two dialects of one view
+is how a single app starts looking like two.
 
 ### Library: one session history over both verticals
 
@@ -167,9 +420,9 @@ so a recording is history the moment it is saved, with nothing to keep in sync.
 A row's stage (Recorded → Transcribed → Summarized, or Captioned) is read from the
 files on disk on every scan (`MeetingLibrary.hasTranscript/hasSummary`) rather than
 stored, so a rerun or a folder deleted from Finder can't leave a stale badge.
-Rows group by calendar day, open on their own screen (meeting → Meeting Summary
-with that recording selected, captions → Captions), and expose Rename, Reveal in
-Finder, Export Markdown (the *composed* summary, edits included) and delete.
+Rows group by calendar day, open in the workspace on that artifact
+(`AppState.show(_:)`), and expose Rename, Reveal in Finder, Export Markdown
+(the *composed* summary, edits included) and delete.
 Deleting a captions entry only forgets the run; deleting a meeting destroys
 audio, so it is the one action behind a confirm — and it is absent from the
 sidebar entirely. The sidebar's Recent (`SidebarRecent`) is the same list,
@@ -405,6 +658,117 @@ screen again rather than updating anything. A scheme nothing on the Mac answers
 there is the same bug the send affordance was rebuilt to stop shipping. That
 sheet is the one confirm step in the feature, because it writes into another app.
 
+### The model stays loaded
+
+`BackendService` spawns one process per command, writes one JSON line, closes
+stdin and reads to EOF. That is right for transcription and rendering — rare,
+heavy, and a fresh process is a free guarantee that nothing they allocated
+outlives them. It was wrong for chat: closing stdin ends `main.py`'s loop, which
+runs `_shutdown()` → `pool.release()` → 4.4 GB of weights freed. Every message
+paid the load again, measured at **3.7 s, identical on the second message**,
+which is what no reuse at all looks like. Both halves were already built for the
+alternative: `main.py` iterates *lines* from stdin and says so, and `pool.py`
+exists so "the session outlives the command that created it". Swift was the only
+piece closing the pipe.
+
+`ResidentBackend` is one long-lived process for the commands whose cost is the
+model (`chat`, `summarize_meeting`, `warmup_llm`, `llm_status`, `release_llm`);
+everything else keeps the one-shot contract. A `result` or `error` message is
+the request frame — the same terminator EOF used to provide. Requests are
+serialized on the actor because an `LLMSession` wraps one decode loop, so two
+concurrent generations would interleave inside the model. Measured after:
+**3.60 s → 0.88 s → 0.88 s.**
+
+Holding weights is not free, so two things give the memory back. An idle
+sweeper releases them after `IDLE_RELEASE_SECONDS` (10 min,
+`PIKO_LLM_IDLE_SECONDS`) — holding 4.4 GB for a conversation somebody walked
+away from an hour ago is a leak with a good excuse, and the reload costs the
+same three seconds it cost the first time. `pool.in_use()` wraps every
+generation, and its busy count is what stops that timer freeing weights
+mid-summary, since a map-reduce calls `acquire` once and then runs for minutes.
+And **Eject** in the sidebar's model card does it now: `release_llm` frees the
+weights *and* the process is taken down, because a resident Python that has
+merely forgotten its model is still a resident Python.
+
+`mx.clear_cache()` is called on release and **nowhere else** — deliberately not
+between requests. MLX's buffer pool *is* the reuse: freed buffers stay around so
+the next allocation does not go back to the allocator, and emptying it after
+every answer spends the next prompt's first milliseconds to make an idle number
+look smaller.
+
+**Why the KV cache is not reused.** A different thing from that pool, and the
+obvious next optimisation: a conversation re-sends its whole history every turn,
+so turn five re-prefills the system sheet, the open artifact and every earlier
+message — thousands of tokens spent proving they have not changed. It was built
+and then removed, because on every model Piko ships it cannot pay. Two reasons,
+and either alone is enough:
+
+- **The cache cannot be rewound.** Qwen3.5 is hybrid — `make_prompt_cache`
+  returns `KVCache` alongside `ArraysCache`, and a recurrent state has no
+  position to roll back to. `can_trim_prompt_cache` is False for all four tiers.
+- **A rewind is always needed.** The model writes a `<think>` block into the
+  cache; the history that comes back next turn carries only the visible answer,
+  because that is what the thread shows. So the two diverge a handful of tokens
+  before the end — measured at `cached=269, fresh=284, shared=263` — and those
+  six have to come off before the shared prefix is usable. `enable_thinking:
+  False` is already in `CHAT_TEMPLATE_KWARGS` and this tier opens the block
+  anyway.
+
+Reuse without a rewind works only when the next prompt strictly extends the
+cache, which a reasoning model's turn never does. Gating it on trimmability made
+it correct and inert, and inert code on the only models anyone runs is worse
+than none — tokenizing the prompt to discover there is no win costs ~0.3 s on a
+1 700-token conversation, which is the whole win. The `reuse_cache` flag stays
+on `LLMSession.stream` as the place to hang this if a tier ever ships a
+trimmable cache; nothing passes it today.
+
+The card reports what MLX says is resident rather than the benchmark figure —
+the number worth showing somebody is the one their machine has. `warmup()` now
+polls `llm_status` until loading finishes: `warmup_llm` starts a background load
+and returns at once, so reading the status out of its own reply is what made the
+workspace claim "model up in 0.3 s" for a model that had not finished loading,
+and — before the process was resident — for one that no longer existed.
+
+### Three tiers, all Qwen, nothing above 9B
+
+The ladder is `fast` (2B) / `balanced` (4B, default) / `quality` (9B) and stops
+there on purpose (`core/llm/registry.py`). It briefly had a fourth rung and both
+candidates for it argued against themselves.
+
+**GPT-OSS 20B** was the only model here from another family and charged for that
+everywhere: harmony prompt format instead of Qwen's template, `reasoning_effort`
+instead of `enable_thinking` with no "off" at all, and an analysis channel
+emitted into the *text* stream. Choosing that tier put this in the chat bubble,
+verbatim:
+
+    <|channel|>analysis<|message|>Need to answer: yes, Piko can burn
+    subtitles.<|end|><|start|>assistant<|channel|>final<|message|>Yes, …
+
+**Qwen3.6-35B-A3B** replaced it and then failed the only test that matters. On
+paper it is the right shape — a mixture of experts, 8 of 256 per token, so ~3B
+of 35B does the work, and a third of the dense model's KV cache. In practice it
+is 20.4 GB of weights, and on a 36 GB Mac with an ordinary desktop open the
+pre-flight check finds ~14 GB available and refuses. A tier that is offered and
+then declines to load is worse than one that was never offered.
+
+What this app asks a model to do — pull action items out of transcript chunks,
+write a summary, answer a short question about what is on screen — is not where
+the last few points of a reasoning benchmark are won. It is where throughput
+over nine chunks and fitting in memory are won.
+
+`commands/reasoning.py` is what keeps thinking out of the thread regardless of
+tier. `extract_json` already read past reasoning on its way to an object, so
+summaries were never affected; a chat streams raw text and nothing read past
+anything. The rule is narrow on purpose: hold back only a reply that *opens*
+with a known marker (`<think>`, `<|channel|>analysis`), and only until the
+matching end marker arrives — buffering a model that never reasons, while
+waiting for an end that never comes, would turn a working answer into a hang.
+Deciding per chunk would leak, because tokens do not arrive on marker
+boundaries, so the filter answers "not yet" while the text is still shorter than
+a marker. While it holds, one `{"type": "chat", "thinking": true}` goes out and
+the bubble says so — the thinking is never shown, but an empty bubble for eight
+seconds is indistinguishable from a hang.
+
 ### Captions skill (`src/piko/skills/captions/`)
 
 Word-level Whisper timestamps flow through:
@@ -413,6 +777,36 @@ Word-level Whisper timestamps flow through:
 3. `styles/` — registry `STYLES` in `__init__.py`. `BaseStyle` owns the generic event generator with three `word_mode`s (static / reveal / highlight with configurable color); line-based styles (mrbeast, hormozi, minimal) only override `decorate_word()`/`word_text()` hooks. karaoke and tiktok override `generate_events()` entirely (built-in animation, word_mode is ignored for them — mirrored in Swift by `supportsWordMode`).
 
 `generate_subtitles()` returns `(SSAFile, emoji_timeline)` — a tuple, not just the file.
+
+**Typography is declared as fractions of the frame, not pixels.** Every style
+sets `font_scale` / `margin_v_scale` / `outline_scale` (of frame height) and
+`BaseStyle.apply_geometry()` resolves them; the fractions were derived from the
+pixel values the styles used to hardcode, so 1080p landscape is unchanged to
+the pixel. What changes is everything else: a 4K master no longer gets
+1080p-sized lettering, `SIDE_SAFE_AREA` (5 % of width) replaces pysubs2's 10 px
+default that ran text to the frame edge, and a taller-than-wide frame is lifted
+to `PORTRAIT_SAFE_BOTTOM` (12 % of height) because a style's own bottom margin
+lands underneath the TikTok/Reels/Shorts controls. Rotation matters here:
+`ffprobe stream=width,height` reports *coded* dimensions and ignores the display
+matrix while ffmpeg auto-rotates before the filter chain, so `probe_video()`
+swaps them itself — otherwise a portrait iPhone clip stored as 1920×1080 + 90°
+gets `PlayRes 1920×1080` over a 1080×1920 frame.
+
+**Cards break at sentences and pauses**, not at a word count
+(`group_words_into_cards`). Every limit is checked *before* the word is
+appended: checking after is what let one card hold the words on both sides of a
+30-second silence and hang on screen for the whole of it. Word count, card
+duration and a character budget derived from the actual frame width are the
+backstop, not the rule. `plain.py` reuses the same function with reading limits
+(42 chars/line, 2 lines, ≤6 s, ≥0.9 s hold) to write the `.srt` and `.vtt`, so
+the file handed to YouTube breaks where the picture breaks. Transcript text is
+brace-escaped on the way into ASS — an unescaped `{` opens an override block and
+swallows the caption.
+
+Fonts are resolved, not requested (`fonts.py`): libass substitutes silently, so
+Hormozi asking for Montserrat — which ships with neither macOS nor this repo —
+quietly stopped being Hormozi on any clean machine. `pick_font()` takes
+preferred-first candidates ending in something macOS always has.
 
 ### B-roll cut-ins (local, no network)
 
@@ -454,6 +848,9 @@ drop manually downloaded clips into the folders instead.
 
 ## Hard-won gotchas
 
+- **An undrained ffmpeg stderr deadlocks the render.** `run_ffmpeg()` in `core/media.py` always reads the pipe, whether or not a progress callback was given. ffmpeg writes its banner and continuous stats there; leave it unread and it blocks once the ~64 KB buffer fills, a few minutes into a long encode. `compose_broll` opened the pipe and only drained it when it had a callback — which `_render` never gave it. The same loop keeps the last 24 lines, so a failure reports ffmpeg's own words instead of a bare exit code.
+- **Delivery flags are not optional**: `-pix_fmt yuv420p` (a 10-bit HEVC or ProRes source otherwise yields an mp4 that social platforms reject and half the players won't open) and `-movflags +faststart`. Audio is copied only when the container will take it (`MP4_AUDIO_CODECS`) and transcoded to AAC otherwise — a plain `-c:a copy` failed the whole burn on an opus source. `h264_videotoolbox` is used when this Mac's ffmpeg has it, with a resolution-scaled bitrate because VideoToolbox has no CRF; libx264 CRF 18 is the fallback.
+- **Swift's `hashValue` is seeded per process** — never put one in a cache key that has to survive a relaunch. `CaptionTranscript.textFingerprint` uses SHA-256 for exactly this reason.
 - **SPM + AVKit**: `Package.swift` must keep `.linkedFramework("AVKit")`. SPM autolinks only the `_AVKit_SwiftUI` overlay; without AVKit itself the app crashes at runtime (`getSuperclassMetadata` abort) the moment `VideoPlayer` appears.
 - **BackendService project-root discovery** walks up looking for `pyproject.toml` from the bundle path (covers `build/Piko.app` inside the repo) and from `#filePath` (covers bare-executable runs via Xcode/`swift run`, which build into DerivedData/`.build`). Both are dev-machine assumptions by design.
 - **Swift concurrency**: `swift build` treats some Swift-6 concurrency issues as warnings; don't mutate captured locals inside the `MainActor.run` closures in VM stream loops.

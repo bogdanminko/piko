@@ -6,11 +6,25 @@ never touches the frontend.
 
 Picks come from bench/llm (Qwen3.5-4B at 4-bit, measured on an M4 Max):
 `balanced` is the default because it runs comfortably on 16 GB while beating
-the smaller tier on every quality axis. The two tiers above it are opt-in:
-`quality` (dense 9B) still fits 16 GB but leaves little room beside it, and
-`max` (20B MoE) does not fit PRODUCT.md's "comfortably on a 16 GB Mac" bar at
-all. Note this is four tiers where PRODUCT.md describes three — the ladder grew
-a rung and the doc has not caught up.
+the smaller tier on every quality axis, and `quality` (dense 9B) is the opt-in
+above it — still inside 16 GB, with little room beside it.
+
+**Nothing larger than 9B, on purpose.** The ladder briefly had a fourth rung
+and both candidates for it argued against themselves. GPT-OSS 20B was the only
+model here from another family and charged for that everywhere: harmony prompt
+format instead of Qwen's template, `reasoning_effort` instead of
+`enable_thinking` with no "off" at all, and an analysis channel emitted into
+the *text* stream — choosing that tier put `<|channel|>analysis<|message|>…`
+verbatim into the chat bubble. Qwen3.6-35B-A3B replaced it and then failed the
+only test that matters: 20.4 GB of weights, and on a 36 GB Mac with an ordinary
+desktop open the pre-flight check finds ~14 GB free and refuses. A tier that is
+offered and then declines to load is worse than one that was never offered.
+
+What the app actually asks a model to do — extract action items from transcript
+chunks, write a summary, answer a short question about what is on screen — is
+not where the last few points of reasoning benchmark are won. It is where
+throughput over nine chunks and fitting in memory are won. Three tiers, all
+Qwen, none of them a download somebody regrets.
 """
 
 from __future__ import annotations
@@ -55,15 +69,6 @@ TIERS: dict[str, ModelSpec] = {
         ram_mb=6000,  # measured: 5.96 GB peak RSS, of which 5.04 GB weights
         min_ram_mb=16384,
         context_tokens=262144,
-    ),
-    "max": ModelSpec(
-        tier="max",
-        repo="mlx-community/gpt-oss-20b-MXFP4-Q8",
-        name="GPT-OSS 20B",
-        size_mb=12100,
-        ram_mb=14500,  # STILL AN ESTIMATE — not on disk here, 12 GB to fetch
-        min_ram_mb=24576,
-        context_tokens=131072,
     ),
 }
 

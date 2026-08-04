@@ -16,3 +16,25 @@ __pycache__/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Keys, certificates, provisioning profiles.
+# gitleaks (pre-commit + CI) catches PEM-armoured private keys by their header,
+# but a DER/PKCS#12 bundle is binary and carries no such marker — so the
+# container formats have to be kept out by name. `make-signing-cert.sh` writes
+# its key.pem/cert.pem/identity.p12 into a mktemp dir it deletes on exit; these
+# patterns cover the copies people make by hand while debugging signing.
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+*.der
+*.p8
+*.jks
+*.keystore
+*.mobileprovision
+*.provisionprofile
+id_rsa
+id_ecdsa
+id_ed25519

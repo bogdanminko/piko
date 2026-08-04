@@ -136,4 +136,7 @@ if [ "${PIKO_INSTALL:-0}" = "1" ] || [ -n "$INSTALLED" ]; then
     /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
         -f "$DEST/Piko.app"
     echo "Installed $DEST/Piko.app"
+    # Spelled out because the bundle was moved, not copied: `open build/Piko.app`
+    # is what the docs teach and it no longer exists after this branch runs.
+    echo "Run it with: open -a $DEST/Piko.app"
 fi

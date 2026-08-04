@@ -56,10 +56,15 @@ struct PreviewView: View {
 
             runTimeline
 
-            // Saving lives in the screen header (Save Video… / Export .srt…);
+            // Saving lives in the screen header (Save Video… / Save .srt…);
             // the render stays in the app cache until then.
-            Button("Process Another") {
-                onReset()
+            HStack(spacing: 10) {
+                // Back to the words without redoing anything — a wrong name
+                // is usually spotted here, watching the burned result.
+                if processor.hasTranscript {
+                    Button("Back to Transcript") { processor.showTranscript() }
+                }
+                Button("Process Another") { onReset() }
             }
             .padding(.bottom)
         }

@@ -37,6 +37,22 @@ RETRY_TEMPERATURE = 0.4
 # fallback. Matches ```json ... ``` and bare ``` ... ```.
 _FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
 
+# A reasoning model answers *after* its reasoning, behind a marker: Qwen closes
+# the block with </think>, harmony (GPT-OSS) opens the answer with a final
+# channel. Everything before it is not the answer, and it is full of braces —
+# the model drafts the very JSON it is about to write, and quotes the input.
+# Measured on GPT-OSS 20B, that reliably turned a correct final answer into a
+# parse failure, which the caller then reports as "the model returned nothing".
+# Reasoning is disabled where a template allows it (mlx_backend.py); this is for
+# the models and providers where it cannot be.
+_REASONING_ENDS = ("</think>", "<|channel|>final<|message|>")
+
+#: How a reply announces that what follows is reasoning rather than the answer.
+#: Only text that opens with one of these is held back — a model that does not
+#: reason must not be buffered waiting for an end marker that never comes.
+REASONING_STARTS = ("<think>", "<|channel|>analysis", "<|start|>assistant<|channel|>analysis")
+REASONING_ENDS = _REASONING_ENDS
+
 
 class LLMSession(ABC):
     """One configured, ready-to-use model.
@@ -56,6 +72,7 @@ class LLMSession(ABC):
         sampling: SamplingParams | None = None,
         json_schema: dict[str, Any] | None = None,
         stop: Sequence[str] | None = None,
+        reuse_cache: bool = False,
     ) -> Iterator[GenerationChunk]:
         """Yield chunks as they are produced; the last one has `done=True`.
 
@@ -64,6 +81,12 @@ class LLMSession(ABC):
         strongly as they can — constrained decoding where the backend supports
         it, prompt instruction where it does not — so a caller must still
         validate. `generate_json` does that for you.
+
+        `reuse_cache` keeps the KV cache between calls and re-uses however much
+        of it the new prompt still agrees with. Opt-in, and only correct where
+        consecutive calls really do share a prefix: a conversation does, the
+        chunks of a transcript do not. Providers without a cache to keep ignore
+        it.
         """
 
     def generate(
@@ -169,14 +192,29 @@ class LLMSession(ABC):
         self.close()
 
 
+def _after_reasoning(text: str) -> str:
+    """Drop everything up to the last reasoning marker, keeping the answer.
+
+    Deliberately the *last* occurrence and applied for every marker: a model
+    that reasons twice, or a harmony reply that also contains a </think>, must
+    leave only what follows the final one.
+    """
+    for marker in _REASONING_ENDS:
+        index = text.rfind(marker)
+        if index >= 0:
+            text = text[index + len(marker) :]
+    return text
+
+
 def extract_json(text: str) -> dict[str, Any] | None:
     """Best-effort: pull one JSON object out of a model's reply.
 
-    Handles the three shapes seen in bench/llm runs — a bare object, an object
-    inside a ``` fence, and an object with prose around it. Returns None when
-    nothing parses, so callers can retry rather than guess.
+    Handles the shapes seen in bench/llm runs — a bare object, an object inside
+    a ``` fence, an object with prose around it, and an object preceded by a
+    reasoning block. Returns None when nothing parses, so callers can retry
+    rather than guess.
     """
-    body = text.strip()
+    body = _after_reasoning(text).strip()
     fenced = _FENCE.search(body)
     if fenced:
         body = fenced.group(1).strip()

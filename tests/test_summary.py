@@ -24,6 +24,7 @@ from piko.skills.meeting.summary import (
     language_name,
     numbered_lines,
     resolve_due_dates,
+    summarize,
 )
 
 SEGMENTS = [
@@ -228,8 +229,9 @@ class FakeSession(LLMSession):
         sampling: SamplingParams | None = None,
         json_schema: dict[str, Any] | None = None,
         stop: Sequence[str] | None = None,
+        reuse_cache: bool = False,
     ) -> Iterator[GenerationChunk]:
-        self.calls.append({"messages": list(messages)})
+        self.calls.append({"messages": list(messages), "sampling": sampling})
         yield GenerationChunk(
             text=self.text, prompt_tokens=7, generation_tokens=1, done=True, finish_reason="stop"
         )
@@ -310,3 +312,50 @@ def test_an_unusable_meeting_date_skips_resolution_entirely():
 
     assert session.calls == []
     assert "due_date" not in items[0]
+
+
+# --- sampling settings -----------------------------------------------------
+#
+# The knobs on the Models screen were, for a while, rendered from the backend,
+# stored, sent — and then ignored by this module, which sampled at constants of
+# its own. Nothing about that was visible from the outside: the summary simply
+# came out as if the sliders did not exist. Hence a test per end of the wire.
+
+# One object that satisfies both schemas, so the same canned reply works for
+# the extract stage and the reduce stage.
+_BOTH_SCHEMAS = (
+    '{"notes":"Release talk","topics":["release"],'
+    '"decisions":[{"text":"Ship on Friday","ref":2}],'
+    '"action_items":[],"open_questions":[],'
+    '"brief":"We ship on Friday.","summary":"The call settled the date."}'
+)
+
+
+def test_the_sampling_setting_reaches_every_stage():
+    session = _session(_BOTH_SCHEMAS)
+    summarize(session, SEGMENTS, speakers=SPEAKERS, sampling=SamplingParams(max_tokens=2048))
+
+    assert session.calls, "the summary has to have called the model at all"
+    assert {call["sampling"].max_tokens for call in session.calls} == {2048}
+
+
+def test_a_stage_never_raises_the_ceiling_it_was_given():
+    """A low setting is a limit, not a suggestion — including for the stages
+    that used to ask for more than it."""
+    session = _session(_BOTH_SCHEMAS)
+    summarize(session, SEGMENTS, speakers=SPEAKERS, sampling=SamplingParams(max_tokens=128))
+
+    assert all(call["sampling"].max_tokens <= 128 for call in session.calls)
+
+
+def test_the_deadline_pass_caps_itself_below_the_setting():
+    """Two dates cannot need 4096 tokens, and a budget that large is only room
+    to loop in."""
+    items = [
+        {"text": "One", "start": 1.0, "due": "by Friday"},
+        {"text": "Two", "start": 2.0, "due": "tomorrow"},
+    ]
+    session = _session('{"dates":[]}')
+    resolve_due_dates(session, items, "2026-07-26", sampling=SamplingParams(max_tokens=4096))
+
+    assert session.calls[0]["sampling"].max_tokens == 60 + 40 * 2

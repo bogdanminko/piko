@@ -15,7 +15,13 @@ from __future__ import annotations
 
 from .registry import TIERS, available_tiers, default_tier, resolve_tier
 from .sampling import CONTROLS, SamplingParams, controls_payload
-from .session import LLMSession, extract_json, open_session
+from .session import (
+    REASONING_ENDS,
+    REASONING_STARTS,
+    LLMSession,
+    extract_json,
+    open_session,
+)
 from .types import (
     GenerationChunk,
     GenerationResult,
@@ -27,6 +33,8 @@ from .types import (
 )
 
 __all__ = [
+    "REASONING_ENDS",
+    "REASONING_STARTS",
     "CONTROLS",
     "TIERS",
     "GenerationChunk",

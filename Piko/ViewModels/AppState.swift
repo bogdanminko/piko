@@ -1,9 +1,10 @@
 import SwiftUI
 
 enum AppScreen: String, CaseIterable, Identifiable {
+    /// Where the app opens and where work happens. One recording, whatever
+    /// can be got out of it — not one tab per kind of result.
+    case artifact
     case library
-    case summary
-    case captions
     case models
     case appearance
 
@@ -11,13 +12,25 @@ enum AppScreen: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .artifact: "Workspace"
         case .library: "Library"
-        case .summary: "Meeting Summary"
-        case .captions: "Captions"
         case .models: "Models"
         case .appearance: "Appearance"
         }
     }
+}
+
+/// Which artifact the workspace is showing.
+///
+/// The two verticals used to be two tabs, which made the app ask what kind of
+/// work this was *before* it had looked at the file — and made one product
+/// read as two. They are results now, not destinations: the pipeline is chosen
+/// from the file itself and can be switched afterwards in one click.
+enum ArtifactFocus: Equatable {
+    /// Nothing open: the workspace shows the way in.
+    case none
+    case meeting
+    case video
 }
 
 /// Shell-level state: which screen is open and how the window looks.
@@ -30,7 +43,31 @@ final class AppState {
     private static let sidebarKey = "piko.sidebarCollapsed"
     private static let settingsKey = "piko.captionSettingsCollapsed"
 
-    var screen: AppScreen = .library
+    var screen: AppScreen = .artifact
+
+    /// What the workspace is currently working on.
+    var focus: ArtifactFocus = .none
+
+    /// The recorder's controls are wanted in the workspace. Shell-level rather
+    /// than local to the conversation because "Record a Call" is offered from
+    /// the sidebar too, and a recording started from there has to raise the
+    /// same bar — `recorder.isActive` alone is false for the seconds a
+    /// permission prompt is up, which is exactly when the controls matter.
+    var wantsRecorder = false
+
+    /// Load an artifact into the workspace. Everything that opens something —
+    /// Library, Recent, a `piko://` link, a drop, a recording — goes through
+    /// here, so there is exactly one way to arrive at the work.
+    ///
+    /// It does **not** select a screen any more. The workspace is the chat,
+    /// always; this says which pipeline the thing that just arrived belongs to,
+    /// and the conversation opens it in the panel beside itself. Sending a file
+    /// to a module screen instead was the whole bug: dropping a video landed on
+    /// a transcriber, not in the session that was meant to hold it.
+    func show(_ focus: ArtifactFocus) {
+        self.focus = focus
+        screen = .artifact
+    }
 
     /// Themes loaded from the Themes folder (`ThemeLibrary`); reloaded via
     /// `refreshCustomThemes()` whenever the generator saves or deletes one.

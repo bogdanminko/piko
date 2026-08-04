@@ -17,6 +17,18 @@ struct BackendMessage: Decodable {
     let success: Bool?
     let outputPath: String?
     let subtitlePath: String?
+    /// Unstyled subtitle files, written on every render because they cost
+    /// nothing. `.srt` is what every platform and editor reads; `.ass` above
+    /// keeps the look but almost nothing else opens it.
+    let srtPath: String?
+    let vttPath: String?
+    /// One streamed piece of a chat answer (`{"type": "chat"}`). Tokens arrive
+    /// as they are decoded; the final `result` carries the whole text again.
+    let delta: String?
+    /// Sent once when a reasoning model has started thinking and nothing is
+    /// coming out yet — the seconds before the first visible token, which
+    /// without this look identical to a hang.
+    let thinking: Bool?
     let transcriptionPath: String?
     let language: String?
     let wordCount: Int?
@@ -47,6 +59,8 @@ struct BackendMessage: Decodable {
     let languages: [SummaryLanguage]?
     /// Whether a summarizer model is resident, and whether it is loading.
     let llm: LLMStatus?
+    /// What one chat answer cost, reported on its final `result`.
+    let stats: ChatStats?
     /// The finished meeting summary (summarize_meeting).
     let summary: MeetingSummary?
     let summaryPath: String?
@@ -58,6 +72,8 @@ struct BackendMessage: Decodable {
     init(type: String, stage: String? = nil, percent: Double? = nil,
          message: String? = nil, success: Bool? = nil,
          outputPath: String? = nil, subtitlePath: String? = nil,
+         srtPath: String? = nil, vttPath: String? = nil,
+         delta: String? = nil, thinking: Bool? = nil,
          transcriptionPath: String? = nil, language: String? = nil,
          wordCount: Int? = nil, keywordsFound: Int? = nil,
          models: [WhisperModel]? = nil, code: String? = nil,
@@ -71,6 +87,7 @@ struct BackendMessage: Decodable {
          samplingControls: [SamplingControl]? = nil,
          languages: [SummaryLanguage]? = nil,
          llm: LLMStatus? = nil,
+         stats: ChatStats? = nil,
          summary: MeetingSummary? = nil, summaryPath: String? = nil,
          downloadedBytes: Int? = nil, bytesPerSecond: Int? = nil) {
         self.type = type
@@ -80,6 +97,10 @@ struct BackendMessage: Decodable {
         self.success = success
         self.outputPath = outputPath
         self.subtitlePath = subtitlePath
+        self.srtPath = srtPath
+        self.vttPath = vttPath
+        self.delta = delta
+        self.thinking = thinking
         self.transcriptionPath = transcriptionPath
         self.language = language
         self.wordCount = wordCount
@@ -101,6 +122,7 @@ struct BackendMessage: Decodable {
         self.samplingControls = samplingControls
         self.languages = languages
         self.llm = llm
+        self.stats = stats
         self.summary = summary
         self.summaryPath = summaryPath
         self.downloadedBytes = downloadedBytes
@@ -111,6 +133,9 @@ struct BackendMessage: Decodable {
         case type, stage, percent, message, success
         case outputPath = "output_path"
         case subtitlePath = "subtitle_path"
+        case srtPath = "srt_path"
+        case vttPath = "vtt_path"
+        case delta, thinking
         case transcriptionPath = "transcription_path"
         case language
         case wordCount = "word_count"
@@ -119,7 +144,7 @@ struct BackendMessage: Decodable {
         case processedSeconds = "processed_seconds"
         case totalSeconds = "total_seconds"
         case brollInserts = "broll_inserts"
-        case clips, tiers, llm
+        case clips, tiers, llm, stats
         case totalRamMb = "total_ram_mb"
         case defaultTier = "default_tier"
         case samplingControls = "sampling_controls"
@@ -178,6 +203,32 @@ struct LLMTier: Codable, Identifiable, Hashable {
     }
 }
 
+/// What one answer cost.
+///
+/// Four numbers with two different sources, kept apart on purpose. `promptTps`
+/// and `generationTps` are mlx-lm's own rates for the two halves of a run —
+/// reading the prompt and writing the answer. `ttftSeconds` and `totalSeconds`
+/// are wall-clock around the whole thing, so they include a cold model's load,
+/// the prompt being built, and the protocol. A run that felt slow shows it here
+/// even when the model's rates were fine, which is the point.
+struct ChatStats: Codable, Hashable {
+    let promptTokens: Int?
+    let generationTokens: Int?
+    let promptTps: Double?
+    let generationTps: Double?
+    let ttftSeconds: Double?
+    let totalSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+        case generationTokens = "generation_tokens"
+        case promptTps = "prompt_tps"
+        case generationTps = "generation_tps"
+        case ttftSeconds = "ttft_seconds"
+        case totalSeconds = "total_seconds"
+    }
+}
+
 /// Whether the summarizer is resident, so the UI can show "warming up…".
 struct LLMStatus: Codable, Hashable {
     let loaded: Bool
@@ -185,12 +236,25 @@ struct LLMStatus: Codable, Hashable {
     let modelKey: String?
     let matchesRequest: Bool
     let warmupError: String?
+    /// Seconds since the model last did any work, and how long it may sit
+    /// there before it gives the memory back on its own.
+    let idleSeconds: Double?
+    let releasesAfter: Double?
+    /// What the process is actually holding — reported by MLX rather than
+    /// estimated from a benchmark, because the number worth showing somebody is
+    /// the one their machine has right now.
+    let activeBytes: Int?
+    let cacheBytes: Int?
 
     enum CodingKeys: String, CodingKey {
         case loaded, loading
         case modelKey = "model_key"
         case matchesRequest = "matches_request"
         case warmupError = "warmup_error"
+        case idleSeconds = "idle_seconds"
+        case releasesAfter = "releases_after"
+        case activeBytes = "active_bytes"
+        case cacheBytes = "cache_bytes"
     }
 }
 
@@ -239,6 +303,9 @@ struct WhisperModel: Codable, Identifiable {
 enum ProcessingState: Equatable {
     case idle
     case processing(stage: String, percent: Double, message: String)
+    /// Words are on screen and every free export is available. The burn —
+    /// the one step that costs a re-encode — waits for the user to ask.
+    case transcribed
     case done(outputPath: String, subtitlePath: String)
     case error(message: String)
 }

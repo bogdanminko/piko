@@ -41,6 +41,22 @@ final class MicrophoneCapture {
     /// recorder restarts capture so the writer picks up the new sample rate.
     var onConfigurationChanged: (() -> Void)?
 
+    /// The rate the hardware is *actually* delivering, the first time a buffer
+    /// proves it differs from what the engine advertised.
+    ///
+    /// This is not belt and braces. `inputNode.outputFormat(forBus:)` read
+    /// before `engine.start()` reports the engine's input format, which is
+    /// 48 kHz on this Mac whatever the device does — and AirPods on a call run
+    /// their microphone at 16 or 24 kHz. The writer then resampled 48→16 on
+    /// audio that was already 16, wrote a third of the frames, and the drain
+    /// loop's silence padding made up the difference against the wall clock.
+    /// The result was a file of exactly the right length in which every voice
+    /// was three times too fast — a 49-minute call, unusable.
+    ///
+    /// The buffer that arrives carries its own format, and that is the only
+    /// account of the sample rate that cannot be wrong.
+    var onSampleRateChanged: ((Double) -> Void)?
+
     func start() throws {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -51,8 +67,21 @@ final class MicrophoneCapture {
         deviceName = AudioDevices.defaultInputDevice().flatMap(AudioDevices.name) ?? "Microphone"
 
         let ring = buffer
-        input.installTap(onBus: 0, bufferSize: 4_096, format: format) { pcmBuffer, _ in
+        // `nil` rather than the format read above: the node hands over whatever
+        // it is really producing, and asking for a specific format here is how
+        // a mismatch becomes silent instead of visible.
+        input.installTap(onBus: 0, bufferSize: 4_096, format: nil) { [weak self] pcmBuffer, _ in
             Self.forward(pcmBuffer, to: ring)
+            let actual = pcmBuffer.format.sampleRate
+            guard actual > 0 else { return }
+            Task { @MainActor [weak self] in
+                guard let self, abs(actual - self.sampleRate) > 1 else { return }
+                self.log.info(
+                    "Microphone is really at \(actual) Hz, not \(self.sampleRate) Hz — correcting"
+                )
+                self.sampleRate = actual
+                self.onSampleRateChanged?(actual)
+            }
         }
 
         observer = NotificationCenter.default.addObserver(

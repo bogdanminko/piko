@@ -7,10 +7,11 @@ import SwiftUI
 /// Summary screen is history here the moment it is saved, with no third copy
 /// to keep in sync.
 struct LibraryView: View {
-    @Bindable var appState: AppState
-    var processor: VideoProcessorVM
+    let workspace: Workspace
     var history: HistoryStore
-    var meeting: MeetingVM
+
+    private var appState: AppState { workspace.appState }
+    private var meeting: MeetingVM { workspace.meeting }
 
     @Environment(\.pikoTheme) private var theme
     @State private var query = ""
@@ -205,19 +206,15 @@ struct LibraryView: View {
                 Text("Nothing here yet.")
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundStyle(theme.text)
-                Text("Record or drop a call on Meeting Summary, or caption a video — "
-                     + "every session lands here with its transcript and summary, "
-                     + "and reopens from this list.")
+                Text("Record a call or drop any file with speech in it — every "
+                     + "session lands here with its transcript, and reopens "
+                     + "from this list.")
                     .font(.system(size: 12.5))
                     .lineSpacing(2)
                     .foregroundStyle(theme.dim)
-                HStack(spacing: 9) {
-                    Button("Record a meeting") { appState.screen = .summary }
-                        .buttonStyle(AccentButtonStyle())
-                    Button("Caption a video") { appState.screen = .captions }
-                        .buttonStyle(GhostButtonStyle())
-                }
-                .padding(.top, 4)
+                Button("Open the workspace") { appState.screen = .artifact }
+                    .buttonStyle(AccentButtonStyle())
+                    .padding(.top, 4)
             }
         }
     }
@@ -263,8 +260,12 @@ struct LibraryView: View {
     /// The session currently loaded on its own screen.
     private func isOpen(_ item: LibraryItem) -> Bool {
         switch item.source {
-        case .meeting(let recording): meeting.selectedID == recording.id
-        case .captions(let entry): processor.videoURL?.path == entry.videoPath
+        // "Open" now means "some conversation is about it", which is the only
+        // reading that survives having more than one.
+        case .meeting(let recording):
+            workspace.store.session(holdingMeeting: recording.id) != nil
+        case .captions(let entry):
+            workspace.store.session(holdingVideo: URL(fileURLWithPath: entry.videoPath)) != nil
         }
     }
 
@@ -272,17 +273,7 @@ struct LibraryView: View {
     /// Clicking the one that is already open only navigates — nothing is
     /// reprocessed.
     private func open(_ item: LibraryItem) {
-        switch item.source {
-        case .meeting(let recording):
-            meeting.select(recording)
-            appState.screen = .summary
-        case .captions(let entry):
-            guard entry.fileExists else { return }
-            appState.screen = .captions
-            guard processor.videoURL?.path != entry.videoPath else { return }
-            processor.reset()
-            processor.videoURL = URL(fileURLWithPath: entry.videoPath)
-        }
+        ArtifactRouting.open(item, into: workspace)
     }
 
     /// The title is the one thing on a row a person owns; the rest is read off

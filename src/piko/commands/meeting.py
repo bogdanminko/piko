@@ -9,9 +9,10 @@ the same folder without redoing finished work.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
-from ..core.llm import pool
+from ..core.llm import SamplingParams, pool
 from ..core.media import get_video_duration
 from ..core.memory import InsufficientMemoryError
 from ..protocol import emit
@@ -70,10 +71,20 @@ def _raw_tracks(folder: Path, meta: dict) -> dict[str, Path]:
     return tracks
 
 
-def finalize_recording(folder: Path) -> dict:
+#: Percent and a line of what is happening, for the caller to emit.
+ProgressFn = Callable[[int, str], None]
+
+
+def finalize_recording(folder: Path, on_step: ProgressFn | None = None) -> dict:
     """Encode both tracks, mix them for playback, drop the raw PCM.
 
     Returns the updated metadata. Already-finalized folders pass through.
+
+    `on_step` is reported per encode rather than left to the caller's single
+    "preparing…" at the start. Fifty minutes of raw PCM is around 200 MB across
+    the two tracks, and a mix plus two AAC encodes over that takes long enough
+    that a bar frozen at 10% is indistinguishable from an app that has died —
+    which is exactly how it was reported.
     """
     meta = _load_meta(folder)
     raw = _raw_tracks(folder, meta)
@@ -83,12 +94,25 @@ def finalize_recording(folder: Path) -> dict:
 
     duration = max(track_duration(path) for path in raw.values())
 
+    # One step for the mix, one per track. Named after what is happening so the
+    # wait is legible rather than merely animated.
+    steps = 1 + len(raw)
+    done = 0
+
+    def step(message: str) -> None:
+        nonlocal done
+        if on_step:
+            on_step(10 + int(80 * done / steps), message)
+        done += 1
+
+    step(f"Mixing {duration / 60:.0f} min of audio…")
     # Mix from the raw tracks (lossless input) before they are removed. Track
     # order is fixed so a re-run produces the same file.
     ordered = [raw[name] for name in sorted(raw)]
     mix_tracks(ordered, folder / MIXED_FILE)
 
     for name, path in raw.items():
+        step(f"Encoding the {name} track…")
         encoded = encode_track(path, folder / f"{name}.m4a")
         meta["tracks"][name]["file"] = encoded.name
 
@@ -106,16 +130,19 @@ def handle_finalize_recording(params: dict) -> None:
     """Called right after Stop, before any transcription."""
     folder = Path(params["recording_dir"])
 
-    try:
+    def report(percent: int, message: str) -> None:
         emit(
             {
                 "type": "progress",
                 "stage": "finalizing",
-                "percent": 10,
-                "message": "Preparing the recording...",
+                "percent": percent,
+                "message": message,
             }
         )
-        meta = finalize_recording(folder)
+
+    try:
+        report(5, "Preparing the recording...")
+        meta = finalize_recording(folder, on_step=report)
         emit(
             {
                 "type": "result",
@@ -173,11 +200,42 @@ def handle_import_recording(params: dict) -> None:
         emit({"type": "error", "message": str(e), "code": type(e).__name__})
 
 
+def _reuse_transcription(path: str | None) -> dict | None:
+    """A transcription of this same speech, already produced elsewhere.
+
+    The cache is keyed on the file it was handed, and the two halves of the
+    app hand it different files: captions transcribe the video itself, a
+    meeting transcribes the `meeting.m4a` extracted from it. Same speech, same
+    words, and without this the second reading pays for an entire ASR pass
+    that has already been run — an hour of audio thrown away on a click.
+
+    Only ever a *reuse*, never a fallback: a missing or unreadable file drops
+    through to transcribing properly rather than failing.
+    """
+    if not path:
+        return None
+    source = Path(path)
+    if not source.exists():
+        return None
+    try:
+        data = json.loads(source.read_text())
+    except (OSError, ValueError):
+        return None
+    if not data.get("segments"):
+        return None
+    return {
+        "language": data.get("language", "unknown"),
+        "segments": data["segments"],
+        "path": str(source),
+    }
+
+
 def handle_transcribe_meeting(params: dict) -> None:
     """Transcribe a recorded meeting and label who spoke each segment."""
     folder = Path(params["recording_dir"])
     model = params.get("model", DEFAULT_MODEL)
     language = params.get("language")
+    force = bool(params.get("force"))
 
     try:
         meta = finalize_recording(folder)
@@ -185,7 +243,20 @@ def handle_transcribe_meeting(params: dict) -> None:
         if not mixed.exists():
             raise FileNotFoundError(f"No mixed audio in {folder}")
 
-        data = transcribe_video(str(mixed), model, language, force=bool(params.get("force")))
+        # `force` is the escape hatch for a transcript that came out wrong, so
+        # it has to outrank the reuse as well as the cache.
+        data = None if force else _reuse_transcription(params.get("transcription_path"))
+        if data is not None:
+            emit(
+                {
+                    "type": "progress",
+                    "stage": "transcribing",
+                    "percent": 95,
+                    "message": "Reusing the transcript from this recording...",
+                }
+            )
+        else:
+            data = transcribe_video(str(mixed), model, language, force=force)
 
         tracks = meta.get("tracks", {})
         mic = load_samples(folder / tracks.get("mic", {}).get("file", "mic.m4a"))
@@ -308,15 +379,23 @@ def handle_summarize_meeting(params: dict) -> None:
         # from today's date: a call summarized a week later must not shift.
         meeting_date = params.get("meeting_date") or _started_at(folder)
 
-        summary = summarize(
-            session,
-            transcript.get("segments", []),
-            speakers=transcript.get("speakers"),
-            language=transcript.get("language"),
-            output_language=params.get("output_language"),
-            meeting_date=meeting_date or None,
-            on_progress=on_progress,
-        )
+        # Marked in use for the whole map-reduce: `acquire` happens once at the
+        # top and the run can take minutes, so an idle timer keyed on
+        # acquisition alone would free the weights mid-summary.
+        with pool.in_use():
+            summary = summarize(
+                session,
+                transcript.get("segments", []),
+                speakers=transcript.get("speakers"),
+                language=transcript.get("language"),
+                output_language=params.get("output_language"),
+                meeting_date=meeting_date or None,
+                # The Models screen's sliders, clamped into their safe ranges
+                # (core/llm/sampling.py). Absent keys keep their defaults, so an
+                # untouched install summarizes exactly as before.
+                sampling=SamplingParams.from_params(params),
+                on_progress=on_progress,
+            )
         summary["language"] = transcript.get("language", "unknown")
         summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2))
 

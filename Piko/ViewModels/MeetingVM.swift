@@ -106,11 +106,20 @@ final class MeetingVM {
     /// Bring an existing file into the same pipeline — anything ffmpeg reads.
     /// Only its audio is extracted into the meeting folder; the file the user
     /// picked is left untouched where it is.
-    func importFile(at url: URL, model: String, diarize: Bool = false) async {
+    ///
+    /// `reusing` is a transcription of this same file that another part of the
+    /// app has already produced — dropping a video transcribes it, and asking
+    /// for a call summary afterwards would otherwise pay for the identical ASR
+    /// pass a second time. The backend treats it as a reuse, never a
+    /// substitute: an unreadable one falls through to transcribing properly.
+    func importFile(at url: URL, model: String, diarize: Bool = false,
+                    reusing transcriptionPath: String? = nil) async {
         guard !isBusy else { return }
         phase = .working(job: .transcript, percent: 0,
                          message: "Importing \(url.lastPathComponent)...")
-        let task = Task { await runImport(url, model: model, diarize: diarize) }
+        let task = Task {
+            await runImport(url, model: model, diarize: diarize, reusing: transcriptionPath)
+        }
         work = task
         await task.value
         work = nil
@@ -122,7 +131,8 @@ final class MeetingVM {
         work?.cancel()
     }
 
-    private func runImport(_ url: URL, model: String, diarize: Bool) async {
+    private func runImport(_ url: URL, model: String, diarize: Bool,
+                           reusing transcriptionPath: String?) async {
         let id = MeetingLibrary.newID()
         let recording = MeetingRecording(
             id: id,
@@ -181,7 +191,8 @@ final class MeetingVM {
 
         phase = .idle
         select(imported)
-        await runTranscription(imported, model: model, diarize: diarize)
+        await runTranscription(imported, model: model, diarize: diarize,
+                               reusing: transcriptionPath)
     }
 
     // MARK: - Library
@@ -300,7 +311,8 @@ final class MeetingVM {
     private func runTranscription(_ recording: MeetingRecording,
                                   model: String,
                                   diarize: Bool = false,
-                                  force: Bool = false) async {
+                                  force: Bool = false,
+                                  reusing transcriptionPath: String? = nil) async {
         phase = .working(job: .transcript, percent: 0, message: "Preparing the recording...")
 
         var params: [String: Any] = [
@@ -313,6 +325,10 @@ final class MeetingVM {
         // Opt-in, and only sent when its model is already on disk — the
         // backend must never be the thing that starts a download.
         if diarize { params["diarize"] = true }
+        // Same speech already transcribed on the captions side: the backend
+        // reuses it rather than running an identical ASR pass over the audio
+        // it extracted from the very same file.
+        if let transcriptionPath { params["transcription_path"] = transcriptionPath }
 
         var failure: String?
         for await message in await backend.execute(command: "transcribe_meeting", params: params) {

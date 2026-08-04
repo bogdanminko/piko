@@ -19,7 +19,15 @@ from typing import Any
 # Defaults are deliberately greedy. Summarization is an extraction task — the
 # bench (bench/llm) ran everything at temperature 0, and creative sampling on a
 # meeting summary invents attendees and decisions.
-DEFAULT_MAX_TOKENS = 1024
+#
+# `max_tokens` bounds the *generation* only — the prompt is not counted against
+# it, and neither is the model's context window, which is two orders of
+# magnitude larger (registry.py). It is therefore a ceiling, not an allocation:
+# a stage that finishes its JSON in 300 tokens costs 300. The generous default
+# is what stops the opposite failure, which is the expensive one — a reply cut
+# off mid-object parses as nothing at all, so the whole stage is lost rather
+# than shortened.
+DEFAULT_MAX_TOKENS = 4096
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +66,15 @@ class SamplingParams:
 
     def with_temperature(self, temperature: float) -> SamplingParams:
         return replace(self, temperature=temperature)
+
+    def capped_at(self, max_tokens: int) -> SamplingParams:
+        """The same knobs with a tighter output bound — never a looser one.
+
+        For the stages whose output size is known in advance (one short object
+        per deadline, say): the user's setting stays the ceiling, but a stage
+        that cannot need 4096 tokens must not be handed 4096 tokens to loop in.
+        """
+        return replace(self, max_tokens=min(self.max_tokens, max_tokens))
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -164,7 +181,7 @@ CONTROLS: tuple[Control, ...] = (
         step=64,
         default=DEFAULT_MAX_TOKENS,
         integer=True,
-        help="Upper bound on one generation. Long summaries need more.",
+        help="Upper bound on one generation, prompt not included. Long meetings need more.",
     ),
 )
 

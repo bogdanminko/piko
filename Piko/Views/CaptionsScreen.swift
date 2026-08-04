@@ -1,37 +1,34 @@
 import SwiftUI
 
-/// The working captions vertical: drop a video, transcribe once, restyle
-/// instantly. Layout follows the design mockup — content on the left,
-/// caption settings in a fixed right panel.
+/// A video artifact: transcribe once, correct the words, then style and burn
+/// if a burned copy is what is wanted. Content on the left, caption settings
+/// in a fixed right panel.
+///
+/// One of two readings the workspace can give a file, not a destination —
+/// hence "Summarise as a Call" in the header, which is how a wrong guess gets
+/// corrected without going back to a drop zone.
 struct CaptionsScreen: View {
     @Bindable var appState: AppState
     @Bindable var processor: VideoProcessorVM
     @Bindable var modelManager: ModelManagerVM
+    @Bindable var meeting: MeetingVM
     var stylePreviews: StylePreviewsVM
+    /// Rendered as the expanded artifact panel rather than as a screen. The
+    /// panel carries its own way back, and two chevrons one above the other
+    /// that mean different things — collapse the panel, close the artifact —
+    /// is worse than one.
+    var embedded = false
     @Environment(\.pikoTheme) private var theme
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            ScreenHeader(title: "Styled Captions", subtitle: subtitleLine) {
-                HStack(spacing: 7) {
-                    if case .done = processor.state {
-                        if processor.subtitleURL != nil {
-                            Button("Export .srt…") { processor.saveSubtitles() }
-                                .controlSize(.small)
-                        }
-                        Button("Save Video…") { processor.saveVideo() }
-                            .buttonStyle(AccentButtonStyle())
-                    }
-                    PanelToggleButton(
-                        icon: "sidebar.right",
-                        help: appState.captionSettingsCollapsed ? "Show settings" : "Hide settings"
-                    ) {
-                        withAnimation(.easeInOut(duration: 0.18)) {
-                            appState.captionSettingsCollapsed.toggle()
-                        }
-                    }
-                }
-            }
+            ScreenHeader(title: title,
+                         subtitle: subtitleLine,
+                         onBack: embedded ? nil : { appState.show(.none) },
+                         backBlockedReason: processor.isProcessing
+                             ? "Cancel the run first"
+                             : nil,
+                         accessory: { headerActions })
             HStack(alignment: .top, spacing: 20) {
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -45,9 +42,63 @@ struct CaptionsScreen: View {
         .padding(EdgeInsets(top: 22, leading: 26, bottom: 22, trailing: 26))
     }
 
+    private var headerActions: some View {
+        HStack(spacing: 7) {
+            if case .done = processor.state {
+                if processor.srtURL != nil {
+                    Button("Save .srt…") { processor.saveSRT() }
+                        .controlSize(.small)
+                }
+                Button("Save Video…") { processor.saveVideo() }
+                    .buttonStyle(AccentButtonStyle())
+            }
+            reinterpretButton
+            PanelToggleButton(
+                icon: "sidebar.right",
+                help: appState.captionSettingsCollapsed ? "Show settings" : "Hide settings"
+            ) {
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    appState.captionSettingsCollapsed.toggle()
+                }
+            }
+        }
+    }
+
+    private var title: String {
+        processor.videoURL?.deletingPathExtension().lastPathComponent ?? "Video"
+    }
+
     private var subtitleLine: String {
-        processor.videoURL?.lastPathComponent
-            ?? "Burned-in animated subtitles, fully on-device"
+        processor.videoURL == nil
+            ? "Burned-in animated subtitles, fully on-device"
+            : "Transcript, subtitle files, and a burned copy if you want one"
+    }
+
+    /// The other reading of the same file. The workspace guessed this was a
+    /// clip to caption because it is short and has a picture; a screen-shared
+    /// call under ten minutes is exactly where that guess is wrong, and the
+    /// cost of being wrong should be one button, not a re-drop.
+    @ViewBuilder
+    private var reinterpretButton: some View {
+        if let url = processor.videoURL {
+            Button("Summarise as a Call") {
+                appState.show(.meeting)
+                Task {
+                    // The words are already known — this file has just been
+                    // transcribed. Handing that over is the difference between
+                    // switching reading and paying for the whole ASR pass twice.
+                    await meeting.importFile(at: url,
+                                             model: modelManager.selectedModelId,
+                                             diarize: modelManager.diarizationReady,
+                                             reusing: processor.transcriptionPath)
+                }
+            }
+            .controlSize(.small)
+            .disabled(processor.isProcessing)
+            .help(processor.transcriptionPath == nil
+                  ? "Treat this recording as a conversation: summary, decisions, action items"
+                  : "Reuses the transcript already made here — no second transcription")
+        }
     }
 
     @ViewBuilder
@@ -59,7 +110,11 @@ struct CaptionsScreen: View {
         case .processing(_, let percent, let message):
             ProcessingView(percent: percent, message: message,
                            processedSeconds: processor.processedMediaSeconds,
-                           totalSeconds: processor.totalMediaSeconds)
+                           totalSeconds: processor.totalMediaSeconds,
+                           onCancel: { processor.cancel() })
+
+        case .transcribed:
+            TranscriptView(processor: processor, onBurn: { processor.burn() })
 
         case .done:
             PreviewView(
@@ -84,17 +139,16 @@ struct CaptionsScreen: View {
         .cardSurface(theme)
     }
 
-    /// Cue-level QA (reading speed, line length) is designed but the
-    /// backend checks don't exist yet.
+    /// What the caption layout actually guarantees. Written as statements
+    /// rather than promises: everything listed here is enforced in
+    /// `styles/base.py` and `plain.py`, and the card used to advertise rules
+    /// that did not exist.
     private var checksCard: some View {
         VStack(alignment: .leading, spacing: 9) {
-            HStack {
-                SectionLabel(text: "Checks")
-                Spacer()
-                ComingSoonBadge()
-            }
-            Text("Piko will flag cues that read faster than 20 characters per second "
-                 + "and split lines longer than 42 characters.")
+            SectionLabel(text: "Layout rules")
+            Text("Cards break at sentences and at pauses, never across a silence. "
+                 + "Type size and margins scale with the frame, so vertical video "
+                 + "clears the platform UI. Saved .srt lines wrap at 42 characters.")
                 .font(.system(size: 11.5))
                 .lineSpacing(2)
                 .foregroundStyle(theme.dim)

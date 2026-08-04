@@ -7,6 +7,7 @@ emits protocol messages via piko.protocol.emit.
 from __future__ import annotations
 
 from .broll_pack import handle_download_broll_pack, handle_fetch_broll, handle_search_broll
+from .chat import handle_chat
 from .llm import (
     handle_download_llm_model,
     handle_list_llm_tiers,
@@ -32,6 +33,7 @@ from .transcribe import handle_transcribe
 
 HANDLERS = {
     "process": handle_process,
+    "chat": handle_chat,
     "transcribe": handle_transcribe,
     "finalize_recording": handle_finalize_recording,
     "import_recording": handle_import_recording,

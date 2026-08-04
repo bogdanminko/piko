@@ -90,6 +90,14 @@ final class PCMTrackWriter {
 
     /// Fill a gap (source not started yet, or starved) so both tracks stay
     /// aligned to the same wall clock.
+    ///
+    /// Worth knowing what this can hide. If the resampler is mistuned — told a
+    /// higher source rate than the device delivers — every chunk comes out
+    /// short, and padding faithfully makes the difference up in silence. The
+    /// file then has exactly the right duration and the wrong contents: speech
+    /// sped up, spaced out with quiet. That is why the rate now comes from the
+    /// buffers themselves (`MicrophoneCapture.onSampleRateChanged`) rather than
+    /// from a format read before the engine started.
     func appendSilence(frames: Int) {
         guard frames > 0 else { return }
         let chunk = 16_000

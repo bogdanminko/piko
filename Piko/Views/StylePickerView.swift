@@ -15,11 +15,7 @@ struct StylePickerView: View {
     @State private var fetchConcept = ""
     @State private var fetchQuery = ""
 
-    /// TikTok and Karaoke animate words themselves; word modes only
-    /// apply to the line-based styles.
-    private var supportsWordMode: Bool {
-        ![.tiktok, .karaoke].contains(processor.selectedStyle)
-    }
+    private var supportsWordMode: Bool { processor.selectedStyle.supportsWordMode }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -195,7 +191,7 @@ struct StylePickerView: View {
 
             if processor.brollEnabled, case .done = processor.state {
                 Button("Regenerate with Current Clips") {
-                    Task { await processor.forceRerender() }
+                    processor.forceRerender()
                 }
                 .controlSize(.small)
                 .disabled(processor.isProcessing)

@@ -9,7 +9,8 @@ from ..cache import CACHE_DIR
 from ..core.media import burn_subtitles, get_video_duration, get_video_resolution
 from ..core.memory import InsufficientMemoryError
 from ..protocol import emit
-from ..skills.captions import generate_subtitles
+from ..skills.captions import generate_subtitles, save_plain_subtitles
+from ..skills.captions.keyword_detector import detect_keywords
 from .transcribe import DEFAULT_MODEL, count_words, format_clock, transcribe_video
 
 
@@ -59,7 +60,7 @@ def _render(
     )
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     ass_path = Path(output_path).with_suffix(".ass")
-    subs, emoji_timeline = generate_subtitles(
+    _, emoji_timeline = generate_subtitles(
         segments,
         style_name=style,
         output_path=ass_path,
@@ -68,6 +69,11 @@ def _render(
         word_mode=word_mode,
         highlight_color=highlight_color,
     )
+
+    # The cheapest rung of the export ladder, written every time: an .srt
+    # costs nothing to produce and is the only subtitle file YouTube, Vimeo
+    # and every editor read. It must never sit behind a re-encode.
+    plain_paths = save_plain_subtitles(segments, ass_path)
 
     if not subtitle_only:
         emit(
@@ -118,14 +124,21 @@ def _render(
     if broll_temp is not None:
         broll_temp.unlink(missing_ok=True)
 
-    markers = ("\\c&H00FFFF&", "\\c&H0000FF&", "\\c&H00FF00&", "\\i1")
-    keyword_count = sum(1 for e in subs.events if any(m in e.text for m in markers))
+    # Counted from the detection itself rather than by grepping colour tags
+    # out of the events: tiktok marks keywords with no tag at all (always
+    # reported 0), hormozi's orange was not in the list, and reveal/highlight
+    # repeat a keyword once per word in its card (reported several times).
+    keyword_count = sum(1 for w in detect_keywords(segments) if w.get("is_keyword"))
+
     emit(
         {
             "type": "result",
             "success": True,
-            "output_path": str(output_path),
+            # subtitle_only writes no video, so it must not claim one.
+            "output_path": None if subtitle_only else str(output_path),
             "subtitle_path": str(ass_path),
+            "srt_path": plain_paths["srt"],
+            "vtt_path": plain_paths["vtt"],
             "language": language,
             "style": style,
             "word_count": count_words(segments),

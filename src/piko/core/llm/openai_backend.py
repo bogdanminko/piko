@@ -81,6 +81,7 @@ class OpenAICompatibleSession(LLMSession):
         sampling: SamplingParams | None = None,
         json_schema: dict[str, Any] | None = None,
         stop: Sequence[str] | None = None,
+        reuse_cache: bool = False,  # noqa: ARG002 — the server owns its cache
     ) -> Iterator[GenerationChunk]:
         params = sampling or SamplingParams()
         response_format: ResponseFormatJSONSchema | openai.Omit = omit

@@ -31,7 +31,7 @@ struct ItemText: View {
                     RoundedRectangle(cornerRadius: 6).strokeBorder(theme.accent, lineWidth: 1)
                 )
                 .focused($isFocused)
-                .onAppear { isFocused = true }
+                .onAppear { FieldFocus.take { isFocused = true } }
                 .onSubmit(onSave)
                 .onExitCommand(perform: onCancel)
         } else {

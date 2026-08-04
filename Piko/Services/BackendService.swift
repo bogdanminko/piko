@@ -45,6 +45,12 @@ enum BackendError: LocalizedError {
 actor BackendService {
     private let projectRoot: URL
 
+    /// The one long-lived process, shared by every `BackendService` in the app.
+    ///
+    /// Static because "resident" means one, not one per view model: two
+    /// processes holding the same weights is 8.8 GB to save two seconds.
+    private static var resident: ResidentBackend?
+
     init() {
         // The Python backend lives in the repo, not in the app bundle (dev
         // setup by design). Walk up looking for pyproject.toml from:
@@ -122,7 +128,52 @@ actor BackendService {
         }
     }
 
+    /// Free the resident model and the process holding it.
+    static func ejectModel() async {
+        await resident?.shutdown()
+    }
+
     func execute(command: String, params: [String: Any]? = nil) -> AsyncStream<BackendMessage> {
+        // Anything whose cost is the model goes to the process that already has
+        // it. Everything else keeps the one-shot contract: transcription and
+        // rendering are rare and heavy, and a fresh process is a free guarantee
+        // that nothing they allocated outlives them.
+        if ResidentBackend.residentCommands.contains(command) {
+            return residentExecute(command: command, params: params)
+        }
+        return oneShot(command: command, params: params)
+    }
+
+    private func residentExecute(command: String,
+                                 params: [String: Any]?) -> AsyncStream<BackendMessage> {
+        AsyncStream { continuation in
+            Task {
+                do {
+                    try self.ensureEnvironment { continuation.yield($0) }
+                } catch {
+                    continuation.yield(BackendMessage(
+                        type: "error", message: error.localizedDescription,
+                        success: false, code: "SWIFT_ERROR"))
+                    continuation.finish()
+                    return
+                }
+                let backend = await self.residentBackend()
+                for await message in await backend.send(command: command, params: params) {
+                    continuation.yield(message)
+                }
+                continuation.finish()
+            }
+        }
+    }
+
+    private func residentBackend() async -> ResidentBackend {
+        if let existing = Self.resident { return existing }
+        let backend = ResidentBackend(projectRoot: projectRoot, venvPython: venvPython)
+        Self.resident = backend
+        return backend
+    }
+
+    private func oneShot(command: String, params: [String: Any]? = nil) -> AsyncStream<BackendMessage> {
         AsyncStream { continuation in
             Task {
                 do {

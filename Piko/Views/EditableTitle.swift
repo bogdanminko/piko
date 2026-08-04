@@ -48,7 +48,11 @@ struct EditableTitle: View {
             .focused($isFocused)
             .onAppear {
                 draft = text
-                isFocused = true
+                // A tick late, and only into a field that is already placed:
+                // asked for now, AppKit drops it and the caret stays in
+                // whatever was focused before — usually the workspace composer,
+                // which is what made Rename look like it did nothing.
+                FieldFocus.take { isFocused = true }
             }
             .onSubmit(commit)
             .onExitCommand { isEditing = false }

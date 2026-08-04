@@ -16,6 +16,7 @@ XGrammar) is the upgrade path; until then callers go through
 from __future__ import annotations
 
 import json
+import sys
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
@@ -36,10 +37,26 @@ from .sampling import SamplingParams
 from .session import LLMSession
 from .types import GenerationChunk, GenerationResult, LLMError, Message, ModelSpec
 
-# Qwen3.5 is a hybrid-reasoning model; summarization does not benefit from
-# thinking tokens and pays for them in latency, so they are off by default.
+# Qwen3.5 is a hybrid-reasoning model, and summarization is extraction rather
+# than deliberation: thinking tokens buy no accuracy here and cost twice over —
+# they are spent from the same `max_tokens` the answer needs, and a brace inside
+# a <think> block breaks `extract_json`, which reads from the first "{" to the
+# last "}". So they are off, and `_render_prompt` says so out loud if a template
+# ever refuses to be told.
 # Harmless for templates that do not define the variable — Jinja ignores it.
-CHAT_TEMPLATE_KWARGS: dict[str, Any] = {"enable_thinking": False}
+#
+# Two keys because the two families disagree on the name and on the default.
+# Measured on the shipped tiers (tokenizers only, no weights): Qwen3.5 4B and 9B
+# default to reasoning *on*, and `enable_thinking` is what closes the <think>
+# block; 2B ignores the flag and never opens one. GPT-OSS ignores it entirely —
+# harmony writes "Reasoning: medium" into its system message and only
+# `reasoning_effort` moves it. There is no "off" on that side, so `low` is the
+# floor, and the analysis channel it still emits is dealt with downstream by
+# `extract_json`.
+CHAT_TEMPLATE_KWARGS: dict[str, Any] = {
+    "enable_thinking": False,
+    "reasoning_effort": "low",
+}
 
 # How many prompts decode together in generate_batch. The KV cache grows with
 # this, so it is a memory knob first and a speed knob second — 8 keeps the
@@ -65,6 +82,10 @@ class MLXSession(LLMSession):
     def __init__(self, spec: ModelSpec) -> None:
         self.spec = spec
         self.description = f"{spec.name} ({spec.tier})"
+        #: Cleared the first time this model's chat template refuses
+        #: CHAT_TEMPLATE_KWARGS, so the refusal is diagnosed once per session
+        #: rather than raised and swallowed on every generation.
+        self._template_kwargs = True
 
         # Pre-flight: refuse before touching the weights rather than dying
         # halfway through a 3 GB read.
@@ -95,16 +116,26 @@ class MLXSession(LLMSession):
             turns = _with_json_instruction(turns, json_schema)
 
         _, tokenizer = self._loaded()
-        try:
-            rendered = tokenizer.apply_chat_template(
-                turns, tokenize=False, add_generation_prompt=True, **CHAT_TEMPLATE_KWARGS
-            )
-        except (TypeError, ValueError):
-            # Template does not accept our kwargs (or has none at all).
-            rendered = tokenizer.apply_chat_template(
-                turns, tokenize=False, add_generation_prompt=True
-            )
-        return str(rendered)
+        if self._template_kwargs:
+            try:
+                return str(
+                    tokenizer.apply_chat_template(
+                        turns, tokenize=False, add_generation_prompt=True, **CHAT_TEMPLATE_KWARGS
+                    )
+                )
+            except (TypeError, ValueError) as e:
+                # The template will not take our kwargs. Falling back silently
+                # is what makes this expensive: on a model whose template
+                # defaults to thinking, the only symptom is a summary that got
+                # slow and started failing to parse. Say it once — repeating it
+                # per chunk would bury it — and stop paying for the exception.
+                self._template_kwargs = False
+                _warn(
+                    f"{self.description}: chat template rejected "
+                    f"{CHAT_TEMPLATE_KWARGS} ({e}); if it enables reasoning by "
+                    "default, thinking tokens now come out of max_tokens"
+                )
+        return str(tokenizer.apply_chat_template(turns, tokenize=False, add_generation_prompt=True))
 
     def stream(
         self,
@@ -113,6 +144,7 @@ class MLXSession(LLMSession):
         sampling: SamplingParams | None = None,
         json_schema: dict[str, Any] | None = None,
         stop: Sequence[str] | None = None,
+        reuse_cache: bool = False,  # noqa: ARG002 — see CLAUDE.md; kept off here
     ) -> Iterator[GenerationChunk]:
         if not messages:
             raise LLMError("stream() needs at least one message")
@@ -120,9 +152,9 @@ class MLXSession(LLMSession):
         params = sampling or SamplingParams()
         model, tokenizer = self._loaded()
         prompt = self._render_prompt(messages, json_schema)
-        # A fresh cache per call: consecutive summary chunks share only the
-        # system prompt, and reusing a positional KV cache across unrelated
-        # prompts would silently corrupt the context.
+        # A fresh cache per call. Reusing one across the turns of a conversation
+        # is the obvious optimisation and it does not work here — see
+        # "Why the KV cache is not reused" in CLAUDE.md before trying again.
         cache = make_prompt_cache(model)
         sampler = make_sampler(
             temp=params.temperature,
@@ -236,6 +268,12 @@ class MLXSession(LLMSession):
     def close(self) -> None:
         self._model = None
         self._tokenizer = None
+
+
+def _warn(message: str) -> None:
+    """stdout is the JSON protocol; anything human-readable goes to stderr."""
+    sys.stderr.write(f"[piko] {message}\n")
+    sys.stderr.flush()
 
 
 def _with_json_instruction(

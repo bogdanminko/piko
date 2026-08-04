@@ -16,7 +16,6 @@ struct MeetingSummaryCards: View {
     let summary: ComposedSummary
     @Bindable var meeting: MeetingVM
     /// Jump the player to a moment in the recording.
-    var onSeek: ((Double) -> Void)?
     /// Open the review sheet for these rows, on that destination. Writing into
     /// Reminders or Calendar is outward-facing, so it never happens straight
     /// from a row.
@@ -371,18 +370,14 @@ struct MeetingSummaryCards: View {
         Button("Delete", role: .destructive) { meeting.delete(item) }
     }
 
+    /// A citation you can follow. `Timecode` handles the rest: it is a button
+    /// when a player is open and plain text when there is nothing to play, so
+    /// this does not need to know either way. The parameter that used to carry
+    /// a seek callback here was never once passed a value.
     @ViewBuilder
     private func timecode(_ start: Double?) -> some View {
         if let start {
-            if let onSeek {
-                Button { onSeek(start) } label: {
-                    Timecode(text: Self.clockText(start))
-                }
-                .buttonStyle(.plain)
-                .help("Jump to this moment")
-            } else {
-                Timecode(text: Self.clockText(start))
-            }
+            Timecode(text: Self.clockText(start), seconds: start)
         }
     }
 }

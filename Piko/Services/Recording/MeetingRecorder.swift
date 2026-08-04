@@ -90,7 +90,7 @@ final class MeetingRecorder {
             try await beginRecording()
             state = .recording
         } catch {
-            teardownCaptures()
+            await teardownCaptures()
             state = .failed(error.localizedDescription)
         }
     }
@@ -112,7 +112,7 @@ final class MeetingRecorder {
     func stop() async -> MeetingRecording? {
         guard isActive, let session, var recording else { return nil }
         state = .finishing
-        teardownCaptures()
+        await teardownCaptures()
 
         let duration = await withCheckedContinuation { continuation in
             session.finish { continuation.resume(returning: $0) }
@@ -155,6 +155,12 @@ final class MeetingRecorder {
             try capture.start()
             capture.onConfigurationChanged = { [weak self] in
                 Task { @MainActor in self?.restartMicrophone() }
+            }
+            // The engine's advertised rate is a claim; the first buffer is
+            // evidence. When they disagree the writer is retuned before the
+            // drain loop's next pass, 100 ms later, has anything to hand it.
+            capture.onSampleRateChanged = { [weak self] rate in
+                self?.session?.updateMicSampleRate(rate)
             }
             let writer = try PCMTrackWriter(
                 url: folder.appendingPathComponent("mic.pcm"), sourceSampleRate: capture.sampleRate
@@ -216,13 +222,30 @@ final class MeetingRecorder {
         self.session = session
     }
 
-    private func teardownCaptures() {
+    /// Tear the captures down *off* the main thread.
+    ///
+    /// `AudioDeviceStop`, `AudioDeviceDestroyIOProcID`,
+    /// `AudioHardwareDestroyAggregateDevice` and `AudioHardwareDestroyProcessTap`
+    /// are synchronous HAL calls: each one blocks until the audio server has
+    /// finished with it, and `AudioDeviceStop` in particular waits for the
+    /// IOProc to return. `AVAudioEngine.stop()` is the same shape. Run from the
+    /// main actor — which is where Stop is pressed — that is a beachball with a
+    /// good reason, and the one moment the user is most sure something broke.
+    ///
+    /// The captures are detached first so nothing can call back into a
+    /// half-torn-down object while the hop is in flight.
+    private func teardownCaptures() async {
         micCapture?.onConfigurationChanged = nil
+        micCapture?.onSampleRateChanged = nil
         tapCapture?.onDefaultOutputDeviceChanged = nil
-        micCapture?.stop()
-        tapCapture?.stop()
+        let mic = micCapture
+        let tap = tapCapture
         micCapture = nil
         tapCapture = nil
+        await Task.detached(priority: .userInitiated) {
+            mic?.stop()
+            tap?.stop()
+        }.value
     }
 
     /// Input device or format changed — restart the engine on the same ring

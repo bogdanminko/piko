@@ -455,11 +455,10 @@ def compose_broll(
     Each clip is trimmed to its window, scaled to cover the frame and
     cropped — the result is a full-frame cut-in, ready for subtitle burn.
     """
-    import subprocess
+    from .media import FFMPEG, audio_encoder_args, probe_video, run_ffmpeg, video_encoder_args
 
-    from .media import FFMPEG, get_video_resolution
-
-    width, height = get_video_resolution(video_path)
+    info = probe_video(video_path)
+    width, height = info.width, info.height
     inputs = ["-i", str(video_path)]
     for insert in inserts:
         inputs += ["-i", insert["clip"]]
@@ -484,6 +483,7 @@ def compose_broll(
 
     cmd = [
         FFMPEG,
+        "-nostdin",
         *inputs,
         "-filter_complex",
         ";".join(chains),
@@ -491,32 +491,18 @@ def compose_broll(
         "[out]",
         "-map",
         "0:a?",
-        "-c:a",
-        "copy",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "fast",
-        "-crf",
-        "18",
+        *audio_encoder_args(info.audio_codec),
+        *video_encoder_args(width, height),
+        "-pix_fmt",
+        "yuv420p",
         "-y",
         str(output_path),
     ]
 
-    process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
-    if progress_callback and process.stderr:
-        for line in process.stderr:
-            if "time=" in line:
-                try:
-                    time_str = line.split("time=")[1].split(" ")[0]
-                    parts = time_str.split(":")
-                    seconds = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
-                    progress_callback(seconds)
-                except (IndexError, ValueError):
-                    pass
-    process.wait()
-    if process.returncode != 0:
-        raise RuntimeError(f"FFmpeg b-roll compose failed with code {process.returncode}")
+    # This is an intermediate the burn reads back, so no faststart here —
+    # but stderr still has to be drained, which run_ffmpeg does whether or
+    # not a progress callback was given.
+    run_ffmpeg(cmd, progress_callback)
 
 
 def plan_inserts(

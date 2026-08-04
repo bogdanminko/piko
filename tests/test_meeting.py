@@ -280,3 +280,62 @@ def test_an_undecidable_first_segment_is_not_credited_to_me(recording: Path):
 
     assert tagged[0]["speaker"] in {SPEAKER_ME, SPEAKER_THEM}
     assert tagged[0]["speaker_confidence"] < 0.08  # decided on a hair, and says so
+
+
+# --- Reusing a transcript across the two readings of one file ---
+
+
+def _write_transcription(path: Path) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "language": "en",
+                "segments": [
+                    {
+                        "start": 0.5,
+                        "end": 1.8,
+                        "text": " Shipping on Friday.",
+                        "words": [
+                            {"word": " Shipping", "start": 0.5, "end": 1.1},
+                            {"word": " on", "start": 1.15, "end": 1.3},
+                            {"word": " Friday.", "start": 1.35, "end": 1.8},
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+
+
+def test_an_existing_transcript_is_reused(tmp_path: Path):
+    """Dropping a video transcribes it; asking for a call summary afterwards
+    must not pay for the identical ASR pass a second time."""
+    from piko.commands.meeting import _reuse_transcription
+
+    source = tmp_path / "cached.json"
+    _write_transcription(source)
+
+    data = _reuse_transcription(str(source))
+    assert data is not None
+    assert data["language"] == "en"
+    assert data["segments"][0]["words"][0]["word"] == " Shipping"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [None, "", "{}", '{"segments": []}', "not json at all"],
+    ids=["missing", "empty-file", "no-segments-key", "no-segments", "unparseable"],
+)
+def test_an_unusable_transcript_falls_through_to_transcribing(tmp_path: Path, content):
+    """Reuse is an optimisation, never a substitute: anything it cannot read
+    has to return None so the caller runs the model properly."""
+    from piko.commands.meeting import _reuse_transcription
+
+    if content is None:
+        assert _reuse_transcription(str(tmp_path / "nope.json")) is None
+        assert _reuse_transcription(None) is None
+        return
+
+    path = tmp_path / "broken.json"
+    path.write_text(content)
+    assert _reuse_transcription(str(path)) is None

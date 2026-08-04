@@ -5,6 +5,14 @@ independently (batched — one forward pass over all of them on the embedded
 backend), and the partials are merged into the final result. Long meetings
 therefore cost several model calls, not one.
 
+Every one of those calls runs under the *user's* sampling settings rather than
+a constant chosen per stage. That matters most for `max_tokens`: the reduce
+step writes the whole long read in one JSON object, and a bound too low for it
+does not produce a shorter summary — it produces an unparseable one, which is
+the entire summary lost. Stages whose output size is genuinely known ahead of
+time cap themselves below the setting (`SamplingParams.capped_at`); none raise
+it.
+
 **Timecodes are never generated.** Asking a model for "12:40" produces
 plausible fiction, which is exactly the failure PRODUCT.md's verifiability
 promise cannot survive. Instead every transcript line is numbered, the model
@@ -583,6 +591,7 @@ def resolve_due_dates(
     meeting_date: str,
     *,
     language: str = "English",
+    sampling: SamplingParams | None = None,
 ) -> None:
     """Fill `due_date` / `due_time` on the items that state a deadline.
 
@@ -614,7 +623,9 @@ def resolve_due_dates(
                 {"role": "user", "content": message},
             ],
             DUE_SCHEMA,
-            sampling=SamplingParams(max_tokens=60 + 40 * len(pending)),
+            # The one stage whose size is arithmetic: a date and a time per
+            # item. The user's ceiling still applies, downwards only.
+            sampling=(sampling or SamplingParams()).capped_at(60 + 40 * len(pending)),
             retries=0,
         )
     except StructuredOutputError:
@@ -651,14 +662,22 @@ def summarize(
     output_language: str | None = None,
     meeting_date: str | None = None,
     budgets: Budgets = DEFAULT_BUDGETS,
+    sampling: SamplingParams | None = None,
     on_progress: Callable[[str, float], None] | None = None,
 ) -> dict:
     """Run the whole pipeline and return a summary the UI can render directly.
+
+    `sampling` is the user's own setting, arriving from the Models screen
+    (sampling.py `CONTROLS` → `params["sampling"]`), and every stage below runs
+    under it rather than under a constant chosen here. Its `max_tokens` in
+    particular is what decides whether a long meeting's reduce step can finish
+    its JSON at all — see the note on `DEFAULT_MAX_TOKENS`.
 
     Raises StructuredOutputError only if the reduce step never produces JSON;
     a chunk that fails extraction is skipped, because losing one part of a
     meeting is better than losing the summary.
     """
+    params = sampling or SamplingParams()
     lines = numbered_lines(segments, speakers)
     if not lines:
         raise StructuredOutputError("Transcript has no usable lines to summarize")
@@ -692,7 +711,7 @@ def summarize(
     ]
     results = session.generate_batch(
         conversations,
-        sampling=SamplingParams(max_tokens=900),
+        sampling=params,
         json_schema=EXTRACT_SCHEMA,
         on_done=lambda done: report("extracting", 5 + 60 * done / max(len(chunks), 1)),
     )
@@ -718,7 +737,7 @@ def summarize(
             {"role": "user", "content": _notes_message(partials, target_language)},
         ],
         SUMMARY_SCHEMA,
-        sampling=SamplingParams(max_tokens=1600),
+        sampling=params,
     )
 
     # Backoff on length: ask once for a shorter version, then cut ourselves.
@@ -742,7 +761,7 @@ def summarize(
                     {"role": "user", "content": _notes_message([merged], target_language)},
                 ],
                 SUMMARY_SCHEMA,
-                sampling=SamplingParams(max_tokens=1400),
+                sampling=params,
                 retries=0,
             )
         except StructuredOutputError:
@@ -760,5 +779,11 @@ def summarize(
     # After truncation: only the items that survive are worth a model call.
     if meeting_date:
         report("dating", 98)
-        resolve_due_dates(session, result["action_items"], meeting_date, language=target_language)
+        resolve_due_dates(
+            session,
+            result["action_items"],
+            meeting_date,
+            language=target_language,
+            sampling=params,
+        )
     return result
