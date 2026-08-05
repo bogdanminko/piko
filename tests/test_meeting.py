@@ -339,3 +339,49 @@ def test_an_unusable_transcript_falls_through_to_transcribing(tmp_path: Path, co
     path = tmp_path / "broken.json"
     path.write_text(content)
     assert _reuse_transcription(str(path)) is None
+
+
+# --- notes the user typed --------------------------------------------------
+#
+# `notes.json` is written by the app as each line is entered, in exactly the
+# shape Piko/Models/MeetingNotes.swift encodes. The backend only reads it, and
+# a meeting is worth summarizing whether or not it is there — so every failure
+# to read it is "no notes", never an error.
+
+
+def test_notes_are_read_in_the_shape_the_app_writes(tmp_path: Path):
+    from piko.commands.meeting import _load_notes
+
+    (tmp_path / "notes.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "notes": [
+                    {
+                        "id": "84E1",
+                        "at": 12.5,
+                        "text": "Kirill Zh., not Кирил",
+                        "created_at": "2026-08-04T10:12:31Z",
+                    },
+                    {"id": "84E2", "at": None, "text": "no clock on an import"},
+                ],
+            }
+        )
+    )
+
+    notes = _load_notes(tmp_path)
+    assert [note["text"] for note in notes] == ["Kirill Zh., not Кирил", "no clock on an import"]
+    assert notes[0]["at"] == 12.5
+
+
+@pytest.mark.parametrize(
+    "content",
+    [None, "", "not json", "[]", "{}", '{"notes": "a string"}', '{"notes": [1, 2]}'],
+    ids=["missing", "empty", "unparseable", "array", "no-key", "wrong-type", "not-objects"],
+)
+def test_an_unreadable_notes_file_is_a_meeting_without_notes(tmp_path: Path, content):
+    from piko.commands.meeting import _load_notes
+
+    if content is not None:
+        (tmp_path / "notes.json").write_text(content)
+    assert _load_notes(tmp_path) == []

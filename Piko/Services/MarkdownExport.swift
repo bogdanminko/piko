@@ -9,7 +9,11 @@ import Foundation
 /// has no public API, and a share sheet plus a linked snapshot does the same
 /// job without an AppleScript bridge that breaks.
 enum MarkdownExport {
-    static func make(_ summary: ComposedSummary, for recording: MeetingRecording) -> String {
+    /// `notes` are the lines the user typed during the call. They are their own
+    /// section rather than being folded into the summary: the model was told to
+    /// use them, but what a person wrote is worth reading as they wrote it.
+    static func make(_ summary: ComposedSummary, for recording: MeetingRecording,
+                     notes: [MeetingNote] = []) -> String {
         var lines: [String] = ["# \(recording.title)", ""]
 
         let formatter = DateFormatter()
@@ -46,6 +50,14 @@ enum MarkdownExport {
         if !summary.openQuestions.isEmpty {
             lines += ["## Open questions", ""]
             lines += summary.openQuestions.map { "- \($0.text)\(link($0, recording))" }
+            lines.append("")
+        }
+
+        if !notes.isEmpty {
+            lines += ["## Notes", ""]
+            lines += notes.map { note in
+                "- \(note.text)" + noteLink(note, recording)
+            }
             lines.append("")
         }
 
@@ -111,6 +123,15 @@ enum MarkdownExport {
         guard let start = item.start,
               let url = PikoURL.make(recordingID: recording.id, at: start) else { return "" }
         return " [\(MeetingSummaryCards.clockText(start))](\(url.absoluteString))"
+    }
+
+    /// A note keeps its own citation where it has one; an untimed note is just
+    /// text, and a link to second zero would be a citation to nothing.
+    private static func noteLink(_ note: MeetingNote, _ recording: MeetingRecording) -> String {
+        guard let at = note.at, let url = PikoURL.make(recordingID: recording.id, at: at) else {
+            return ""
+        }
+        return " [\(MeetingSummaryCards.clockText(at))](\(url.absoluteString))"
     }
 
     /// Save panel → file. Returns false when the user cancelled.

@@ -81,6 +81,10 @@ struct MeetingSummaryColumn: View {
         }
     }
 
+    /// Notes typed after the summary on disk was written — the ones it cannot
+    /// have read.
+    private var staleNotes: [MeetingNote] { meeting.notesMissingFromSummary }
+
     /// Above the cards once a summary exists: language, rerun, and — during a
     /// rerun — the progress that replaces both.
     @ViewBuilder
@@ -99,14 +103,27 @@ struct MeetingSummaryColumn: View {
                         .foregroundStyle(theme.dim)
                         .lineLimit(2)
                 }
+                // A summary written before a note was typed cannot have read
+                // it. Said rather than acted on: a rerun costs minutes of the
+                // model's time, and whether one line changes the answer is the
+                // reader's call, not this view's.
+                if !staleNotes.isEmpty {
+                    Text(staleNotes.count == 1
+                         ? "1 note came after this summary"
+                         : "\(staleNotes.count) notes came after this summary")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.accent)
+                        .lineLimit(1)
+                }
                 Spacer()
                 SummaryLanguagePicker(summarizer: summarizer, disabled: meeting.isBusy)
                 RerunButton(title: "Rerun summary", disabled: meeting.isBusy) {
                     Task { await meeting.summarize(recording, params: params, force: true) }
                 }
                 if let summary = meeting.composed {
-                    CopyButton(text: { MarkdownExport.make(summary, for: recording) },
-                               help: "Copy the whole summary")
+                    CopyButton(text: {
+                        MarkdownExport.make(summary, for: recording, notes: meeting.notes.notes)
+                    }, help: "Copy the whole summary")
                 }
             }
         }

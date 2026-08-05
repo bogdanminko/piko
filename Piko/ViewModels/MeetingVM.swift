@@ -37,6 +37,13 @@ final class MeetingVM {
     /// its own file so a rerun of the summary can never overwrite them.
     /// Mutated only through the methods in MeetingVM+Edits.swift.
     var edits = SummaryEdits()
+    /// What the user typed during the call. Not an overlay — nothing generates
+    /// a note — so it is stored as it is written; see MeetingVM+Notes.swift.
+    var notes = MeetingNotes()
+    /// Which meeting `notes` was last read for, so switching between a live
+    /// recording and an open one reloads rather than writing one's lines into
+    /// the other's file.
+    var loadedNotesID: String?
     private(set) var phase: Phase = .idle
 
     /// What the screen shows: the generated summary with the overlay applied.
@@ -90,6 +97,9 @@ final class MeetingVM {
         } else {
             recorder.clearFailure()
             await recorder.start()
+            // The new recording is what notes now belong to, even though the
+            // list is still showing whatever was open when Record was pressed.
+            syncNotes()
         }
     }
 
@@ -209,6 +219,11 @@ final class MeetingVM {
         transcript = recording.flatMap(MeetingLibrary.loadTranscript)
         summary = recording.flatMap(MeetingLibrary.loadSummary)
         edits = recording.map(MeetingLibrary.loadEdits) ?? SummaryEdits()
+        // Notes follow the meeting, and the file is the truth: the lines typed
+        // during a recording were written straight to disk, so re-reading is
+        // what picks them up once that recording becomes the selected one.
+        loadedNotesID = nil
+        syncNotes()
         if case .failed = phase { phase = .idle }
     }
 

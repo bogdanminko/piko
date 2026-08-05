@@ -63,6 +63,33 @@ CHAT_TEMPLATE_KWARGS: dict[str, Any] = {
 # balanced tier's peak within the budget measured in bench/llm.
 BATCH_SIZE = 8
 
+# How much prompt is pushed through the model at once, and for how many prompts
+# at a time. Their *product* is the real knob: it is the number of tokens in one
+# forward pass, and the activations for that pass — 12288-wide MLP intermediates
+# on the 9B tier, several of them live at once — are what a summary's peak
+# memory actually is. Not the weights, and not the KV cache.
+#
+# mlx-lm defaults to 2048 x 8 = 16384 tokens in flight, which is 8x the window
+# its own single-stream path uses, and leaving it there cost 7.3 GB on top of
+# the weights. Measured on Qwen3.5 9B, eight ~1.6k-token chunks, peak MLX
+# memory against wall clock for the whole batch:
+#
+#     2048 x 8 (mlx-lm's default)   12.04 GB   39.0 s
+#     1024 x 8                       9.18 GB   37.7 s
+#      512 x 8                       7.71 GB   37.6 s
+#      256 x 8                       6.82 GB   38.6 s   <- shipped
+#      256 x 4                       6.33 GB   41.6 s
+#
+# Prefill is bandwidth-bound, so a smaller window buys memory back for almost
+# nothing: 256 x 8 gives up 2.7% of the wall clock for 5.2 GB. Narrowing the
+# *batch* instead is the bad trade — 256 x 4 saves another 0.5 GB and costs 8%.
+#
+# 256 x 8 is 2048 tokens per pass, which is exactly the window mlx-lm uses for
+# one sequence. That is the rule worth keeping: summarizing a meeting must not
+# have a larger working set than answering a chat message.
+PREFILL_BATCH_SIZE = 8
+PREFILL_STEP_SIZE = 256
+
 _JSON_INSTRUCTION = (
     "Respond with a single JSON object and nothing else — no prose, no code "
     "fence. It must match this JSON Schema exactly, including every key in "
@@ -151,6 +178,7 @@ class MLXSession(LLMSession):
 
         params = sampling or SamplingParams()
         model, tokenizer = self._loaded()
+        _start_measuring()
         prompt = self._render_prompt(messages, json_schema)
         # A fresh cache per call. Reusing one across the turns of a conversation
         # is the obvious optimisation and it does not work here — see
@@ -214,13 +242,15 @@ class MLXSession(LLMSession):
         together, so N chunks cost far less than N sequential generations.
         `completion_batch_size` caps how many run at once, because the KV cache
         grows with it and the whole point of the tier system is not to blow the
-        memory budget.
+        memory budget. The prefill window is capped for the same reason and
+        matters more — see `PREFILL_STEP_SIZE`.
         """
         if not conversations:
             return []
 
         params = sampling or SamplingParams()
         model, tokenizer = self._loaded()
+        _start_measuring()
         prompts = [
             tokenizer.encode(self._render_prompt(conversation, json_schema))
             for conversation in conversations
@@ -240,6 +270,8 @@ class MLXSession(LLMSession):
                 top_k=params.top_k,
             ),
             completion_batch_size=BATCH_SIZE,
+            prefill_batch_size=PREFILL_BATCH_SIZE,
+            prefill_step_size=PREFILL_STEP_SIZE,
         )
         if on_done is not None:
             on_done(len(response.texts))
@@ -268,6 +300,18 @@ class MLXSession(LLMSession):
     def close(self) -> None:
         self._model = None
         self._tokenizer = None
+
+
+def _start_measuring() -> None:
+    """Begin a fresh peak-memory measurement for this generation.
+
+    MLX's peak is a high-water mark for the whole process and nothing resets
+    it, so a `peak_memory` read after a chat message was reporting whatever the
+    summary before it had cost — the one number a reader would use to judge
+    whether a tier fits their Mac, describing a different job entirely. Weights
+    are already resident by here, so the figure stays inclusive of them.
+    """
+    mx.reset_peak_memory()
 
 
 def _warn(message: str) -> None:

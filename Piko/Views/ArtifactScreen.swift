@@ -307,6 +307,14 @@ struct ArtifactEntry: View {
                     onPauseToggle: meeting.togglePause
                 )
             }
+            // Notes live with the recorder, not on a screen nobody visits
+            // mid-meeting — and only while one runs: `MeetingVM` is app-level,
+            // so a note typed with nothing recording would land on whatever the
+            // list has selected, which here is another session's call. A
+            // finished meeting takes its notes in the expanded panel instead.
+            if meeting.recorder.isActive {
+                MeetingNotesCard(meeting: meeting)
+            }
             // The conversation *is* the way in. A drop panel beside it was a
             // second answer to the same question, and it made the assistant a
             // liar the moment it said "drop the file here" — which it does,
@@ -360,7 +368,10 @@ struct ArtifactEntry: View {
     private var artifactText: String {
         if session.meetingID != nil, let recording = meeting.selected {
             if let summary = meeting.composed, !summary.isEmpty {
-                return MarkdownExport.make(summary, for: recording)
+                // The user's own notes go into the chat's context too: asking
+                // about a call and being answered from everything except the
+                // line you typed yourself is the wrong kind of surprise.
+                return MarkdownExport.make(summary, for: recording, notes: meeting.notes.notes)
             }
             if let transcript = meeting.transcript {
                 return MarkdownExport.transcript(transcript)

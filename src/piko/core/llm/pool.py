@@ -1,6 +1,7 @@
 """Process-wide warm model, so the load cost is paid once per process.
 
-Loading the balanced tier costs ~2 s and ~4.4 GB (bench/llm). That is bearable
+Loading the balanced tier costs ~2 s and 2.2 GB of resident weights (4.7 GB at
+the peak of a summary — registry.py has the measured table). That is bearable
 once, and unbearable per transcript chunk — so the session outlives the command
 that created it and the next command reuses it.
 
@@ -25,10 +26,10 @@ from .session import LLMSession, open_session
 
 # How long a resident model may sit unused before it gives the memory back.
 #
-# Holding 4.4 GB for a conversation somebody walked away from an hour ago is
-# not "warm", it is a leak with a good excuse. Ten minutes is longer than any
-# pause inside a working session and shorter than a lunch break; the reload
-# costs the same two seconds it cost the first time.
+# Holding gigabytes of weights for a conversation somebody walked away from an
+# hour ago is not "warm", it is a leak with a good excuse. Ten minutes is
+# longer than any pause inside a working session and shorter than a lunch
+# break; the reload costs the same two seconds it cost the first time.
 IDLE_RELEASE_SECONDS = float(os.environ.get("PIKO_LLM_IDLE_SECONDS", 600))
 
 _lock = threading.RLock()

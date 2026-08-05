@@ -32,23 +32,33 @@ from __future__ import annotations
 from ..memory import total_memory_mb
 from .types import ModelSpec
 
-# ram_mb is measured peak RSS while summarizing, not download size — every row
-# below, on a 28k-token prompt (longer than a real meeting, so the figure has
-# headroom rather than needing it). Method: load through `mlx_lm.load()`, the
-# same call mlx_backend.py makes, one model per fresh process, RSS read from
-# getrusage. Resident weights alone are roughly half of each figure; the rest is
-# the KV cache the prompt forces, which is why weights are the wrong thing to
-# quote for an LLM.
+# ram_mb is the measured peak of a real summarization, not download size, and
+# it is what `check_memory` refuses a load against — so it has to describe the
+# job the app actually runs.
 #
-# These replace estimates that ran 40-70% high and, through min_ram_mb, decided
-# whether a tier was offered at all.
+# Method, one tier per fresh process: open an `MLXSession` and call its
+# `generate_batch` with eight full `CHUNK_CHARS` chunks of Russian (~2600
+# tokens each — the same character budget in English is ~1600, so this is the
+# expensive end of what a chunk can be) at the default `max_tokens`. That is
+# the map phase of a meeting summary, verbatim.
+#
+# Read from `mx.get_peak_memory()`, **not** from RSS. That is the correction
+# these numbers carry: getrusage does not see Metal's buffers at all, and the
+# figures it produced were 25-35% low — on the 9B tier it reported 5.54 GB for
+# a job whose real peak is 7.13 GB. A guard calibrated on a number that cannot
+# see most of the allocation is a guard that lets the machine start swapping.
+#
+# Weights are roughly two thirds of each figure; the rest is prefill
+# activations and the KV cache, which is why weights are the wrong thing to
+# quote for an LLM. The prefill share used to be far larger — see
+# `PREFILL_STEP_SIZE` in mlx_backend.py for the 5 GB that came off the 9B tier.
 TIERS: dict[str, ModelSpec] = {
     "fast": ModelSpec(
         tier="fast",
         repo="mlx-community/Qwen3.5-2B-4bit",
         name="Qwen3.5 2B",
         size_mb=1750,
-        ram_mb=2000,  # measured: 1.98 GB peak RSS, of which 1.06 GB weights
+        ram_mb=2600,  # measured: 2.52 GB peak, of which 0.99 GB weights
         min_ram_mb=8192,
         context_tokens=262144,
     ),
@@ -57,7 +67,7 @@ TIERS: dict[str, ModelSpec] = {
         repo="mlx-community/Qwen3.5-4B-4bit",
         name="Qwen3.5 4B",
         size_mb=3060,
-        ram_mb=3300,  # measured: 3.26 GB peak RSS, of which 2.37 GB weights
+        ram_mb=4800,  # measured: 4.66 GB peak, of which 2.20 GB weights
         min_ram_mb=16384,
         context_tokens=262144,
     ),
@@ -66,7 +76,13 @@ TIERS: dict[str, ModelSpec] = {
         repo="mlx-community/Qwen3.5-9B-4bit",
         name="Qwen3.5 9B",
         size_mb=5980,
-        ram_mb=6000,  # measured: 5.96 GB peak RSS, of which 5.04 GB weights
+        ram_mb=7300,  # measured: 7.13 GB peak, of which 4.69 GB weights
+        # Left at 16384 deliberately, now that ram_mb is honest. 7.3 GB is a
+        # tier a 16 GB Mac can run with the browser shut and cannot run with
+        # forty tabs open — which is a question about this minute, not about
+        # the machine, and `check_memory` is the thing that answers it. The
+        # picker greys a tier out rather than hiding it, so the requirement is
+        # readable either way.
         min_ram_mb=16384,
         context_tokens=262144,
     ),

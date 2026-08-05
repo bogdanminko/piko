@@ -13,12 +13,17 @@ from typing import Any
 
 from piko.core.llm import GenerationChunk, LLMSession, Message, SamplingParams
 from piko.skills.meeting.summary import (
+    NOTES_RULES,
     Budgets,
+    _chunk_message,
     _clip,
     _dedupe,
+    _notes_for,
+    _notes_message,
     _over_budget,
     _resolve,
     _truncate,
+    anchor_notes,
     chunk_lines,
     detect_language,
     language_name,
@@ -130,6 +135,111 @@ def test_duplicates_across_overlapping_chunks_collapse():
         {"text": "ship on friday!", "start": 30.0},
     ]
     assert len(_dedupe(items)) == 1
+
+
+# --- notes the user typed -------------------------------------------------
+#
+# The one input in this pipeline that no model produced. Two things have to
+# hold: a note is never lost (not to a missing timecode, not to a chunk that
+# failed extraction), and it never gains a citation it did not earn — a note
+# handed to a chunk that cannot see its line would be inviting exactly the
+# invented "ref" the rest of the module exists to prevent.
+
+LINES = numbered_lines(
+    [
+        {"start": 0.0, "text": "Начинаем.", "speaker": "me"},
+        {"start": 10.0, "text": "Кирил берёт миграцию.", "speaker": "them"},
+        {"start": 30.0, "text": "Выпускаем в пятницу.", "speaker": "them"},
+    ]
+)
+
+
+def test_a_note_anchors_to_the_line_that_had_started_when_it_was_typed():
+    """A note is written *after* the thing it is about was said, so the anchor
+    is the line before it, never the one that comes next."""
+    [note] = anchor_notes([{"at": 12.0, "text": "Kirill Zh., not Кирил"}], LINES)
+    assert note.ref == 2
+    assert note.render() == "[2] Kirill Zh., not Кирил"
+
+
+def test_a_note_typed_before_anyone_spoke_anchors_to_the_first_line():
+    [note] = anchor_notes([{"at": 0.0, "text": "agenda"}], LINES)
+    assert note.ref == 1
+
+
+def test_an_untimed_note_keeps_its_text_and_loses_only_the_citation():
+    """An import has no clock, and a line added after the call has no place on
+    the axis. Dropping the text to save the timecode loses the wrong half."""
+    [note] = anchor_notes([{"text": "no clock here"}], LINES)
+    assert note.ref is None
+    assert note.text == "no clock here"
+    # Never "[?]": a question mark where a line number belongs is an invitation
+    # to fill one in, and an invented ref is what the citation scheme forbids.
+    assert note.render() == "(no line) no clock here"
+
+
+def test_blank_notes_are_dropped():
+    assert anchor_notes([{"at": 1.0, "text": "   "}, {"at": 2.0, "text": ""}], LINES) == []
+
+
+def test_notes_come_back_in_time_order_with_the_untimed_last():
+    notes = anchor_notes(
+        [{"at": 30.0, "text": "late"}, {"text": "no time"}, {"at": 1.0, "text": "early"}], LINES
+    )
+    assert [note.text for note in notes] == ["early", "late", "no time"]
+
+
+def test_a_chunk_is_only_given_the_notes_whose_line_it_holds():
+    notes = anchor_notes([{"at": 0.0, "text": "first"}, {"at": 30.0, "text": "third"}], LINES)
+    assert [note.text for note in _notes_for(LINES[:1], notes)] == ["first"]
+    assert [note.text for note in _notes_for(LINES[2:], notes)] == ["third"]
+
+
+def test_an_untimed_note_reaches_no_chunk_at_all():
+    notes = anchor_notes([{"text": "no clock"}], LINES)
+    assert _notes_for(LINES, notes) == []
+
+
+def test_the_reduce_step_is_shown_every_note_including_the_uncitable_ones():
+    notes = anchor_notes([{"at": 10.0, "text": "timed one"}, {"text": "untimed one"}], LINES)
+    message = _notes_message([{"notes": "part"}], "Russian", notes)
+
+    assert "timed one" in message and "untimed one" in message
+    assert "<user_notes>" in message
+
+
+def test_a_meeting_without_notes_carries_no_notes_tag_anywhere():
+    """A rule about a tag that is not in the message is an invitation to invent
+    one, so the block and its rules both have to be absent, not empty."""
+    assert "<user_notes>" not in _chunk_message(LINES, "Russian")
+    assert "<user_notes>" not in _notes_message([{"notes": "part"}], "Russian")
+
+
+def test_notes_reach_the_extraction_prompt_with_their_rules():
+    session = _session(_BOTH_SCHEMAS)
+    summarize(
+        session,
+        SEGMENTS,
+        speakers=SPEAKERS,
+        notes=[{"at": 9.5, "text": "дедлайн — среда, не пятница"}],
+    )
+
+    prompts = [
+        "\n".join(str(message["content"]) for message in call["messages"]) for call in session.calls
+    ]
+    assert any("дедлайн — среда" in prompt for prompt in prompts)
+    assert all(NOTES_RULES in prompt for prompt in prompts if "<user_notes>" in prompt)
+
+
+def test_a_summary_without_notes_prompts_exactly_as_it_did_before():
+    session = _session(_BOTH_SCHEMAS)
+    summarize(session, SEGMENTS, speakers=SPEAKERS)
+
+    everything = "\n".join(
+        str(message["content"]) for call in session.calls for message in call["messages"]
+    )
+    assert "<user_notes>" not in everything
+    assert NOTES_RULES not in everything
 
 
 # --- display budgets ------------------------------------------------------

@@ -78,6 +78,40 @@ enum MeetingLibrary {
         try encoder.encode(edits).write(to: url, options: .atomic)
     }
 
+    /// What the user typed during the call. Written by the app as each line is
+    /// entered; the backend only ever reads it.
+    static func notesURL(for id: String) -> URL {
+        folder(for: id).appendingPathComponent("notes.json")
+    }
+
+    static func loadNotes(for id: String) -> MeetingNotes {
+        guard let data = try? Data(contentsOf: notesURL(for: id)) else { return MeetingNotes() }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return (try? decoder.decode(MeetingNotes.self, from: data)) ?? MeetingNotes()
+    }
+
+    /// Atomic, and self-cleaning like the summary overlay: deleting the last
+    /// note leaves no file behind for the backend to read as an empty list.
+    static func saveNotes(_ notes: MeetingNotes, for id: String) throws {
+        let url = notesURL(for: id)
+        guard !notes.isEmpty else {
+            try? FileManager.default.removeItem(at: url)
+            return
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(notes).write(to: url, options: .atomic)
+    }
+
+    /// When the summary on disk was written, so the screen can tell whether it
+    /// was written before the notes it is missing.
+    static func summaryWritten(for id: String) -> Date? {
+        try? summaryURL(for: id).resourceValues(forKeys: [.contentModificationDateKey])
+            .contentModificationDate
+    }
+
     static func transcriptURL(for id: String) -> URL {
         folder(for: id).appendingPathComponent("transcript.json")
     }

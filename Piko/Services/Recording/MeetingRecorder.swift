@@ -45,6 +45,11 @@ final class MeetingRecorder {
 
     var isActive: Bool { state == .recording || state == .paused }
 
+    /// The meeting being recorded right now, if any. Its folder exists from the
+    /// first sample onwards, which is what lets a note taken at 00:12 be written
+    /// to disk at 00:12 rather than held in memory until Stop.
+    var activeID: String? { recording?.id }
+
     private let permissions: RecordingPermissions
     private let log = Logger(subsystem: "dev.bogdanminko.piko", category: "MeetingRecorder")
 

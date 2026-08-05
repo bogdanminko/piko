@@ -245,8 +245,17 @@ struct ChatMeetingTranscriptCard: View {
                     // idle CPU and a stuttering list were the same picture.
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(transcript.segments) { segment in
-                                row(segment, speakers: transcript.speakers)
+                            // The user's own notes sit on the same axis, so
+                            // they are read in place rather than in a list
+                            // beside the words they were written about.
+                            ForEach(TranscriptEntry.merge(transcript,
+                                                          notes: meeting.notes.notes)) { entry in
+                                switch entry {
+                                case .line(let segment):
+                                    row(segment, speakers: transcript.speakers)
+                                case .note(let note):
+                                    TranscriptNoteRow(note: note)
+                                }
                             }
                         }
                     }

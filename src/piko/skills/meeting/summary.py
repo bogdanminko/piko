@@ -25,6 +25,7 @@ not.
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -86,10 +87,25 @@ You extract facts from one part of a meeting transcript.
 - An open question is one raised and left unanswered here.
 - Write every field in {language}, including topics, whatever language these
   instructions are in.
-- Leave a list empty rather than padding it with weak items.
+- Leave a list empty rather than padding it with weak items.{notes_rules}
 </rules>
 
 <output>A single JSON object. No prose, no code fence.</output>"""
+
+# Appended to both system prompts, and only when that call actually has notes to
+# read: a rule about a tag that is not in the message is an invitation to invent
+# one. The authority order is the point — a note is the one input in the whole
+# pipeline that was not produced by a model, so where it and the ASR disagree it
+# is the ASR that is wrong.
+NOTES_RULES = """
+- <user_notes> are lines the person in the meeting typed while it was happening,
+  each already attached to the transcript line it was typed against.
+- Treat a note as true. Where a note and the transcript disagree — a name, a
+  number, a date — the note is right and the transcript misheard it.
+- A note may state a decision, a task or a question the transcript only implies.
+  Include it, citing the line number the note carries.
+- A note is not a new line: never invent a "ref" for one, and never cite a
+  number that is not in the transcript above."""
 
 REDUCE_SYSTEM = """\
 You merge notes extracted from one meeting into its final summary.
@@ -104,7 +120,7 @@ You merge notes extracted from one meeting into its final summary.
 - "topics" are {topics} or fewer short noun phrases, not sentences.
 - Order every list by "ref", ascending.
 - Write every field in {language}, including topics, whatever language these
-  instructions are in.
+  instructions are in.{notes_rules}
 </rules>
 
 <output>A single JSON object. No prose, no code fence.</output>"""
@@ -388,6 +404,67 @@ def numbered_lines(segments: Sequence[dict], speakers: dict[str, str] | None = N
     return lines
 
 
+@dataclass(frozen=True, slots=True)
+class UserNote:
+    """One line a person typed while the meeting was happening.
+
+    `at` is seconds from the start of the recording — the same axis as the
+    transcript, because the app stamps a note with the recorder's own clock.
+    `ref` is the transcript line it lands on, filled in by `anchor_notes`; it
+    stays None for a note with no time (an imported file, or a line added
+    afterwards), which can still be read but cannot be cited.
+    """
+
+    text: str
+    at: float | None = None
+    ref: int | None = None
+
+    def render(self) -> str:
+        # Spelled out rather than "[?]": a question mark where a line number
+        # goes reads as one to be guessed, and a guessed ref is the failure the
+        # whole citation scheme exists to avoid. Such a note can still shape the
+        # brief; it just cannot become a cited item, which is correct — there is
+        # no moment to check it against.
+        return f"[{self.ref}] {self.text}" if self.ref is not None else f"(no line) {self.text}"
+
+
+def anchor_notes(notes: Sequence[dict], lines: Sequence[Line]) -> list[UserNote]:
+    """Attach every timed note to the line that was being said when it was typed.
+
+    The anchor is the last line that had *started* by then, not the nearest one
+    in either direction: a note is written after the thing it is about was said,
+    so the line before it is the evidence and the line after it is the next
+    subject. A note typed before anyone spoke anchors to the first line.
+
+    Notes with no time keep `ref=None` and are still returned — dropping what
+    somebody typed because it has no timecode would lose the text to save the
+    citation. Empty text is dropped, because there is nothing to lose.
+    """
+    starts = [line.start for line in lines]
+    anchored: list[UserNote] = []
+    for note in notes:
+        text = str(note.get("text", "")).strip()
+        if not text:
+            continue
+        raw = note.get("at")
+        at = float(raw) if isinstance(raw, int | float) else None
+        ref: int | None = None
+        if at is not None and lines:
+            index = bisect_right(starts, at)
+            ref = lines[max(index - 1, 0)].number
+        anchored.append(UserNote(text=text, at=at, ref=ref))
+    anchored.sort(key=lambda note: (note.at is None, note.at or 0.0))
+    return anchored
+
+
+def _notes_block(notes: Sequence[UserNote]) -> str:
+    """The typed lines as one tagged block, or "" when there are none."""
+    if not notes:
+        return ""
+    body = "\n".join(note.render() for note in notes)
+    return f"\n<user_notes>\n{body}\n</user_notes>"
+
+
 def chunk_lines(
     lines: Sequence[Line],
     budget_chars: int = CHUNK_CHARS,
@@ -424,12 +501,26 @@ def chunk_lines(
     return chunks
 
 
-def _chunk_message(chunk: Sequence[Line], language: str) -> str:
+def _chunk_message(chunk: Sequence[Line], language: str, notes: Sequence[UserNote] = ()) -> str:
     body = "\n".join(line.render() for line in chunk)
-    return f"<language>{language}</language>\n<transcript>\n{body}\n</transcript>"
+    return (
+        f"<language>{language}</language>\n<transcript>\n{body}\n</transcript>{_notes_block(notes)}"
+    )
 
 
-def _notes_message(partials: Sequence[dict], language: str) -> str:
+def _notes_for(chunk: Sequence[Line], notes: Sequence[UserNote]) -> list[UserNote]:
+    """The notes this chunk can cite — the ones anchored to a line it holds.
+
+    A note whose line is in another chunk would be citing a number this call
+    cannot see, which is the one thing the ref machinery forbids. Untimed notes
+    are anchored nowhere, so they wait for the reduce step, where the whole
+    transcript's numbering is already settled.
+    """
+    numbers = {line.number for line in chunk}
+    return [note for note in notes if note.ref in numbers]
+
+
+def _notes_message(partials: Sequence[dict], language: str, notes: Sequence[UserNote] = ()) -> str:
     lines: list[str] = [f"<language>{language}</language>"]
     narration = [
         str(partial["notes"]).strip()
@@ -460,7 +551,10 @@ def _notes_message(partials: Sequence[dict], language: str) -> str:
         if items:
             joined = "\n".join(f"- {item}" for item in items)
             lines.append(f"<{field}>\n{joined}\n</{field}>")
-    return "\n".join(lines) or "<notes>empty</notes>"
+    # Every note again, including the ones no chunk could cite: an extraction
+    # that failed or a note with no timecode must not be the reason a line
+    # somebody typed never reaches the summary.
+    return ("\n".join(lines) or "<notes>empty</notes>") + _notes_block(notes)
 
 
 def _resolve(
@@ -658,6 +752,7 @@ def summarize(
     segments: Sequence[dict],
     *,
     speakers: dict[str, str] | None = None,
+    notes: Sequence[dict] | None = None,
     language: str | None = None,
     output_language: str | None = None,
     meeting_date: str | None = None,
@@ -666,6 +761,11 @@ def summarize(
     on_progress: Callable[[str, float], None] | None = None,
 ) -> dict:
     """Run the whole pipeline and return a summary the UI can render directly.
+
+    `notes` are the lines the user typed during the call (`notes.json` in the
+    meeting folder). They are the one input here that no model produced, so the
+    prompts give them authority over the transcript rather than treating them as
+    another opinion — see `NOTES_RULES`.
 
     `sampling` is the user's own setting, arriving from the Models screen
     (sampling.py `CONTROLS` → `params["sampling"]`), and every stage below runs
@@ -699,16 +799,22 @@ def summarize(
             on_progress(stage, percent)
 
     report("extracting", 5)
-    conversations: list[list[Message]] = [
-        [
-            {
-                "role": "system",
-                "content": EXTRACT_SYSTEM.format(language=target_language),
-            },
-            {"role": "user", "content": _chunk_message(chunk, target_language)},
-        ]
-        for chunk in chunks
-    ]
+    typed = anchor_notes(notes or (), lines)
+    conversations: list[list[Message]] = []
+    for chunk in chunks:
+        mine = _notes_for(chunk, typed)
+        conversations.append(
+            [
+                {
+                    "role": "system",
+                    "content": EXTRACT_SYSTEM.format(
+                        language=target_language,
+                        notes_rules=NOTES_RULES if mine else "",
+                    ),
+                },
+                {"role": "user", "content": _chunk_message(chunk, target_language, mine)},
+            ]
+        )
     results = session.generate_batch(
         conversations,
         sampling=params,
@@ -732,9 +838,10 @@ def summarize(
                     summary=budgets.summary_chars,
                     topics=budgets.topics,
                     language=target_language,
+                    notes_rules=NOTES_RULES if typed else "",
                 ),
             },
-            {"role": "user", "content": _notes_message(partials, target_language)},
+            {"role": "user", "content": _notes_message(partials, target_language, typed)},
         ],
         SUMMARY_SCHEMA,
         sampling=params,

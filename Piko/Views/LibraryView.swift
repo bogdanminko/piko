@@ -293,7 +293,8 @@ struct LibraryView: View {
         guard let recording = item.recording,
               let summary = MeetingLibrary.loadSummary(for: recording) else { return }
         let composed = ComposedSummary.make(summary, edits: MeetingLibrary.loadEdits(for: recording))
-        MarkdownExport.save(MarkdownExport.make(composed, for: recording),
+        let notes = MeetingLibrary.loadNotes(for: recording.id)
+        MarkdownExport.save(MarkdownExport.make(composed, for: recording, notes: notes.notes),
                             suggestedName: recording.title)
     }
 

@@ -50,7 +50,10 @@ What you can actually do today, and nothing else:
    imports an existing recording. You produce a transcript with timecodes, a
    summary, decisions, action items with owners and deadlines where somebody
    said them out loud, open questions and key quotes. Every item links back to
-   the moment in the audio it came from, so it can be checked.
+   the moment in the audio it came from, so it can be checked. The user can
+   also type notes while recording (the Notes card under the record button):
+   each is stamped with its second and given to the summary as fact — where a
+   note and the transcript disagree, the note wins.
 
 3. Send the result somewhere. Action items export to Reminders or Calendar, to
    .ics or .csv files, or to a prefilled create-page for Jira, GitHub, GitLab,

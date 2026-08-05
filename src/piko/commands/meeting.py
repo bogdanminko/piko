@@ -39,6 +39,7 @@ _SUMMARY_STAGES = {
 MIXED_FILE = "meeting.m4a"
 TRANSCRIPT_FILE = "transcript.json"
 SUMMARY_FILE = "summary.json"
+NOTES_FILE = "notes.json"
 
 
 def _load_meta(folder: Path) -> dict:
@@ -55,6 +56,24 @@ def _started_at(folder: Path) -> str:
         return str(_load_meta(folder).get("started_at", ""))
     except (OSError, ValueError):
         return ""
+
+
+def _load_notes(folder: Path) -> list[dict]:
+    """The lines the user typed during the call, if there are any.
+
+    Read-only, always: `notes.json` is written by the app as each line is
+    entered and no backend command may touch it — the same rule that keeps a
+    rerun from destroying `summary.edits.json`. A missing or malformed file is
+    simply a meeting with no notes, never an error: a summary is worth having
+    without them.
+    """
+    path = folder / NOTES_FILE
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return []
+    notes = data.get("notes") if isinstance(data, dict) else None
+    return [note for note in notes if isinstance(note, dict)] if isinstance(notes, list) else []
 
 
 def _save_meta(folder: Path, meta: dict) -> None:
@@ -387,6 +406,10 @@ def handle_summarize_meeting(params: dict) -> None:
                 session,
                 transcript.get("segments", []),
                 speakers=transcript.get("speakers"),
+                # What the person in the meeting wrote down as it happened.
+                # They outrank the transcript where the two disagree — a typed
+                # name is spelled, a heard one is guessed.
+                notes=_load_notes(folder),
                 language=transcript.get("language"),
                 output_language=params.get("output_language"),
                 meeting_date=meeting_date or None,

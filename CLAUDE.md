@@ -193,6 +193,35 @@ of a guessed "You".
 `start`/`end`/`speaker`/`text`/`speaker_confidence`) is the seam the
 summarization step consumes — it should read that file, not the audio.
 
+**Notes are the one meeting text that is not an overlay.** `MeetingNotesCard`
+sits under `RecordingBar`, so it appears in both places that bar does — the
+conversation and the expanded meeting screen — and a line typed into it is
+stamped with `recorder.elapsed`, which excludes paused time and is therefore
+the *audio's* axis rather than the wall clock's. That is what lets a note be
+clicked to play from where it was taken, sit in the transcript at the moment it
+was written (`TranscriptEntry.merge`), and be anchored to a transcript line
+number for the model. Nothing generates a note, so unlike `SummaryEdits` there
+is no generated version to compose against and nothing a rerun could destroy:
+`notes.json` in the meeting folder is simply what was typed, written on each
+keystroke's Enter (a call is exactly where "save at the end" loses everything)
+and read but never written by the backend. Untimed notes are real — an import
+has no clock, and a line added before Summarize is worth the same — they just
+cannot be citations, so `anchor_notes` leaves their `ref` null and
+`TranscriptEntry.merge` keeps them out of the transcript rather than inventing
+a second for them.
+
+The prompts give a note **authority over the transcript** (`NOTES_RULES` in
+`skills/meeting/summary.py`): it is the only input in the pipeline a person
+actually wrote, so where a typed name and a heard one disagree it is the ASR
+that is wrong. The rules and the `<user_notes>` block are added only to calls
+that have notes — a rule about a tag that is not in the message is an
+invitation to invent one. A chunk is given only the notes anchored to a line it
+holds, since a note citing a number that chunk cannot see is exactly the
+invented `ref` the module exists to prevent; the reduce step is given all of
+them, so a note in a chunk whose extraction failed is not lost. A summary is
+still cached, so notes added after one was written do not silently invalidate
+it — the toolbar says how many came late and leaves the rerun to the reader.
+
 **The sample rate comes from the buffers, not from the engine.**
 `AVAudioEngine.inputNode.outputFormat(forBus:)` read before `engine.start()`
 reports 48 kHz whatever the device does, and AirPods on a call run their
@@ -755,6 +784,24 @@ What this app asks a model to do — pull action items out of transcript chunks,
 write a summary, answer a short question about what is on screen — is not where
 the last few points of a reasoning benchmark are won. It is where throughput
 over nine chunks and fitting in memory are won.
+
+**A summary's peak memory is the prefill window, not the weights.** The map
+phase batches chunks through `mlx_lm.batch_generate`, and what costs memory
+there is `prefill_batch_size × prefill_step_size` — the number of tokens in one
+forward pass, whose activations (a 12288-wide MLP intermediate on the 9B tier,
+several live at once) dwarf both the weights and the KV cache. mlx-lm's
+defaults put 16 384 tokens in that pass, eight times the window it uses for a
+single sequence, and that alone was **7.3 GB on top of the 9B tier's weights**:
+12.04 GB peak where the registry claimed 6 GB. `PREFILL_STEP_SIZE = 256`
+against `PREFILL_BATCH_SIZE = 8` brings it to 2048 tokens per pass — the same
+working set one chat message has — and the whole run to 7.13 GB, for 2.7% more
+wall clock. Prefill is bandwidth-bound, so the window is nearly free to
+shrink; narrowing the *batch* instead is the bad trade (another 0.5 GB for 8%).
+
+Which is also why `ram_mb` is read from `mx.get_peak_memory()` and never from
+RSS: getrusage does not see Metal's buffers, so the figures it gave were 25-35%
+low, and `check_memory` was letting a job start that could not fit. A guard
+calibrated on a number that cannot see most of the allocation is not a guard.
 
 `commands/reasoning.py` is what keeps thinking out of the thread regardless of
 tier. `extract_json` already read past reasoning on its way to an object, so

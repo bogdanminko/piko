@@ -30,6 +30,13 @@ struct MeetingSummaryView: View {
                 onToggle: { Task { await meeting.toggleRecording(model: modelId, diarize: diarize) } },
                 onPauseToggle: meeting.togglePause
             )
+            // Available for any open meeting, not only a live one: an import
+            // has no clock to stamp against but plenty worth writing down, and
+            // a note added before Summarize is read exactly like one typed
+            // during the call.
+            if meeting.recorder.isActive || meeting.selected != nil {
+                MeetingNotesCard(meeting: meeting, maxListHeight: 96)
+            }
             HStack(alignment: .top, spacing: 20) {
                 MeetingSummaryColumn(meeting: meeting,
                                      summarizer: summarizer,
@@ -73,7 +80,7 @@ struct MeetingSummaryView: View {
 
     private func exportMarkdown(save: Bool) {
         guard let summary = meeting.composed, let recording = meeting.selected else { return }
-        let text = MarkdownExport.make(summary, for: recording)
+        let text = MarkdownExport.make(summary, for: recording, notes: meeting.notes.notes)
         if save {
             MarkdownExport.save(text, suggestedName: recording.title)
         } else {
@@ -162,8 +169,15 @@ struct MeetingSummaryView: View {
         // every one of them on every pass to show five.
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(transcript.segments) { segment in
-                    transcriptRow(segment, speakers: transcript.speakers)
+                // Notes read in the flow of what was being said when they were
+                // written — that is what the timecode on one is for.
+                ForEach(TranscriptEntry.merge(transcript, notes: meeting.notes.notes)) { entry in
+                    switch entry {
+                    case .line(let segment):
+                        transcriptRow(segment, speakers: transcript.speakers)
+                    case .note(let note):
+                        TranscriptNoteRow(note: note)
+                    }
                 }
             }
         }

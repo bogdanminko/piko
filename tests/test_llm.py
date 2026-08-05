@@ -97,6 +97,21 @@ def test_the_ladder_climbs_and_the_ends_are_where_they_belong():
     assert ordered == sorted(ordered), "a bigger model must not ask for less RAM"
 
 
+def test_ram_mb_describes_a_summary_and_not_a_download():
+    """`ram_mb` is what `check_memory` refuses a load against, so it has to
+    cover the job: weights, plus the prefill activations and KV cache that
+    running them costs. Every row once sat within a few percent of `size_mb` —
+    the signature of a figure read from RSS, which does not see Metal's
+    buffers at all, and a guard that therefore let a job start that could not
+    fit. Measured properly, the margin is 20-60%.
+    """
+    for spec in TIERS.values():
+        assert spec.ram_mb >= spec.size_mb * 1.2, (
+            f"{spec.tier}: {spec.ram_mb} MB barely covers {spec.size_mb} MB of weights — "
+            "measure the peak of a real generate_batch, via mx.get_peak_memory()"
+        )
+
+
 def test_nothing_larger_than_the_quality_tier_is_offered():
     """Deliberate, and worth a test because it is a decision, not an oversight.
 
@@ -285,6 +300,57 @@ def test_a_template_that_refuses_our_kwargs_says_so_once(capsys):
 
     warnings = [line for line in capsys.readouterr().err.splitlines() if "chat template" in line]
     assert len(warnings) == 1, "once per session — per chunk would bury it"
+
+
+def test_the_batched_path_bounds_its_prefill_window(monkeypatch):
+    """The map phase's peak memory is `prefill_batch × prefill_step` tokens.
+
+    Left at mlx-lm's defaults that product is 16 384 — eight times the window
+    one sequence gets — and it cost 7.3 GB on top of the 9B tier's weights. The
+    bug was not a wrong constant, it was passing no constant at all, so the
+    test asserts the call and not just the value.
+    """
+    pytest.importorskip("mlx", reason="the MLX backend is not installed here")
+    from piko.core.llm import mlx_backend
+    from piko.core.llm.mlx_backend import (
+        PREFILL_BATCH_SIZE,
+        PREFILL_STEP_SIZE,
+        MLXSession,
+    )
+
+    assert PREFILL_BATCH_SIZE * PREFILL_STEP_SIZE <= 2048, (
+        "summarizing a meeting must not have a larger working set than answering one chat message"
+    )
+
+    class StubTokenizer:
+        def apply_chat_template(self, turns: Any, **kwargs: Any) -> str:
+            return "rendered"
+
+        def encode(self, text: str) -> list[int]:
+            return [1, 2, 3]
+
+    seen: dict[str, Any] = {}
+
+    def fake_batch_generate(model: Any, tokenizer: Any, prompts: Any, **kwargs: Any) -> Any:
+        seen.update(kwargs)
+
+        class Response:
+            texts = ["{}"]
+
+        return Response()
+
+    monkeypatch.setattr(mlx_backend, "batch_generate", fake_batch_generate)
+
+    session = MLXSession.__new__(MLXSession)
+    session.description = "stub"
+    session._template_kwargs = True
+    session._model = cast(Any, object())
+    session._tokenizer = cast(Any, StubTokenizer())
+
+    session.generate_batch([[{"role": "user", "content": "hi"}]])
+
+    assert seen["prefill_batch_size"] == PREFILL_BATCH_SIZE
+    assert seen["prefill_step_size"] == PREFILL_STEP_SIZE
 
 
 # --- provider dispatch ----------------------------------------------------
