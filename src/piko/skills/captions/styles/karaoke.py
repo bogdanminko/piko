@@ -4,34 +4,40 @@ from __future__ import annotations
 
 from pysubs2 import Alignment, Color, SSAEvent, SSAStyle
 
+from ..fonts import pick_font
 from .base import BaseStyle
 
 
 class KaraokeStyle(BaseStyle):
+    max_words = 5
+
+    font_scale = 0.0574
+    margin_v_scale = 0.0463
+    outline_scale = 0.0023
+    shadow_scale = 0.0009
+
     def get_styles(self) -> dict[str, SSAStyle]:
         return {
-            "Karaoke": SSAStyle(
-                fontname="Arial",
-                fontsize=62,
-                bold=True,
-                primarycolor=Color(0, 255, 255, 0),  # Yellow (highlighted)
-                secondarycolor=Color(180, 180, 180, 0),  # Gray (pre-highlight)
-                outlinecolor=Color(0, 0, 0, 0),
-                outline=2.5,
-                shadow=1.0,
-                alignment=Alignment.BOTTOM_CENTER,
-                marginv=50,
+            "Karaoke": self.apply_geometry(
+                SSAStyle(
+                    fontname=pick_font("Arial", "Helvetica"),
+                    bold=True,
+                    primarycolor=Color(0, 255, 255, 0),  # Yellow (highlighted)
+                    secondarycolor=Color(180, 180, 180, 0),  # Gray (pre-highlight)
+                    outlinecolor=Color(0, 0, 0, 0),
+                    alignment=Alignment.BOTTOM_CENTER,
+                )
             ),
         }
 
     def generate_events(self, words: list[dict]) -> list[SSAEvent]:
         """One line = one event with \\kf tags for progressive fill."""
         events = []
-        for line_words in self.group_words(words, max_words=5):
+        for line_words in self.group_words(words):
             parts = []
             for w in line_words:
                 duration_cs = int((w["end"] - w["start"]) * 100)  # centiseconds
-                text = w["word"]
+                text = self.word_text(w)
                 sem = self.semantic_tag(w)
 
                 if sem or w.get("is_keyword"):

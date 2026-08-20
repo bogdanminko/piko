@@ -1,0 +1,12 @@
+Merge these notes from one meeting into its final summary.
+
+<rules>
+- The same item twice is one item, kept at the lowest "ref". Copy every "ref" unchanged.
+- "brief": what was settled, 2-3 sentences, under {brief} characters.
+- "summary": how the discussion went, in order, in paragraphs, under {summary} characters. Not a longer brief.
+- "topics": {topics} or fewer noun phrases.
+- Sort every list by "ref".
+- Write every field in {language}.{notes_rules}
+</rules>
+
+<output>One JSON object, nothing else.</output>

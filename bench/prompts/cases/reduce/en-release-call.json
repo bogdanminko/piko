@@ -1,0 +1,93 @@
+{
+  "id": "en-release-call",
+  "task": "reduce",
+  "lang": "en",
+  "output_language": "English",
+  "why": "The reduce step's real job, handed to it exactly as the map step leaves it: the same decision arrives twice with two different refs, one task arrives twice, and one 'decision' is a fact somebody restated. Partials are written by hand rather than produced by a run, so a reduce prompt is scored on its own merging and not on whichever extract prompt fed it.",
+  "speakers": {"me": "You", "them": "Participants"},
+  "segments": [
+    {"start": 0.0, "speaker": "me", "text": "Right, we're twelve minutes in and I want the release date settled before anything else."},
+    {"start": 7.5, "speaker": "them", "text": "Fine by me. QA finished the regression pass last night, two things still open."},
+    {"start": 14.0, "speaker": "me", "text": "Open how? Blocking or cosmetic?"},
+    {"start": 17.0, "speaker": "them", "text": "Cosmetic. The empty state on the billing page is misaligned in a narrow window."},
+    {"start": 24.0, "speaker": "me", "text": "Then it doesn't block. Are we still saying Friday?"},
+    {"start": 29.0, "speaker": "them", "text": "I'd rather not ship on a Friday. If it breaks nobody is around until Monday."},
+    {"start": 36.0, "speaker": "me", "text": "That's fair. Thursday then."},
+    {"start": 39.5, "speaker": "them", "text": "Thursday works. I'll cut the release branch Wednesday evening."},
+    {"start": 45.0, "speaker": "me", "text": "Good. Ship Thursday, branch cut Wednesday. Can Marta take the release notes?"},
+    {"start": 52.0, "speaker": "them", "text": "Marta isn't on this call, but she owns release notes normally. I'll ping her."},
+    {"start": 59.0, "speaker": "me", "text": "Put it on her anyway, she'll see it in the summary."},
+    {"start": 64.0, "speaker": "them", "text": "Sure. One more thing, we're still on MySQL for the events table and it's groaning."},
+    {"start": 71.0, "speaker": "me", "text": "How bad?"},
+    {"start": 73.0, "speaker": "them", "text": "Writes are at about eighty percent of what the box can take at peak."},
+    {"start": 79.0, "speaker": "them", "text": "We could move that table to Postgres. Or shard it. Or just buy a bigger box."},
+    {"start": 86.0, "speaker": "me", "text": "Not this week. Write up the options and we'll look at it after the release."},
+    {"start": 93.0, "speaker": "them", "text": "I'll have the write-up by Tuesday."},
+    {"start": 97.0, "speaker": "me", "text": "Who would actually do the migration if we go that way?"},
+    {"start": 102.0, "speaker": "them", "text": "That's the bit I don't know. Nobody here has done it at this size."},
+    {"start": 109.0, "speaker": "me", "text": "Leave that open then."},
+    {"start": 112.0, "speaker": "me", "text": "Last thing, the pricing page copy. Did legal come back?"},
+    {"start": 118.0, "speaker": "them", "text": "Not yet. I chased them Monday, nothing since."},
+    {"start": 124.0, "speaker": "me", "text": "Chase again today please."},
+    {"start": 127.0, "speaker": "them", "text": "Will do."}
+  ],
+  "partials": [
+    {
+      "notes": "Release timing and QA status: the regression pass is finished with only a cosmetic issue open, and the ship date moved off Friday.",
+      "topics": ["release date", "QA regression pass", "release notes"],
+      "decisions": [
+        {"text": "Ship on Thursday instead of Friday", "ref": 7},
+        {"text": "Cut the release branch Wednesday evening", "ref": 8},
+        {"text": "The billing page misalignment is cosmetic and does not block the release", "ref": 4}
+      ],
+      "action_items": [
+        {"text": "Write the release notes", "owner": "Marta", "due": null, "ref": 9}
+      ],
+      "open_questions": []
+    },
+    {
+      "notes": "The events table is near its write ceiling; three options were listed and the choice was deferred. The pricing copy is still sitting with legal.",
+      "topics": ["release date", "events table storage", "pricing page copy"],
+      "decisions": [
+        {"text": "Ship Thursday, with the release branch cut the evening before", "ref": 9},
+        {"text": "Defer any storage change until after the release", "ref": 16}
+      ],
+      "action_items": [
+        {"text": "Write up the storage options", "owner": null, "due": "Tuesday", "ref": 17},
+        {"text": "Chase legal again about the pricing page copy", "owner": null, "due": "today", "ref": 23},
+        {"text": "Write the release notes", "owner": "Marta", "due": null, "ref": 11}
+      ],
+      "open_questions": [
+        {"text": "Who would carry out the migration if the team goes ahead", "ref": 18}
+      ]
+    }
+  ],
+  "key": {
+    "people": ["Marta"],
+    "must_merge": [
+      {"what": "Ship Thursday — stated in both partials", "refs_in": [7, 9], "keep_ref": 7},
+      {"what": "Release notes for Marta — stated in both partials", "refs_in": [9, 11], "keep_ref": 9}
+    ],
+    "should_drop": [
+      {"what": "'The billing page misalignment is cosmetic' is a fact that was restated, not a choice that was settled", "ref": 4}
+    ],
+    "must_find": [
+      {"field": "decisions", "what": "Ship Thursday rather than Friday", "lines": [7]},
+      {"field": "decisions", "what": "Release branch cut Wednesday evening", "lines": [8]},
+      {"field": "decisions", "what": "Storage change deferred until after the release", "lines": [16]},
+      {"field": "action_items", "what": "Marta writes the release notes", "lines": [9], "owner": "Marta"},
+      {"field": "action_items", "what": "Storage options written up by Tuesday", "lines": [17]},
+      {"field": "action_items", "what": "Chase legal today about the pricing copy", "lines": [23]},
+      {"field": "open_questions", "what": "Who would carry out the migration", "lines": [18]}
+    ],
+    "traps": [
+      {"id": "bigger-box", "field": "decisions", "forbid": ["bigger box"], "why": "never in the partials at all — its appearance is invention, not merging"},
+      {"id": "legal-approved", "field": "decisions", "forbid": ["legal approved", "approved by legal", "sign-off"], "why": "legal never came back"}
+    ],
+    "expect_counts": {"decisions": [2, 4], "action_items": [3, 4], "open_questions": [1, 1], "topics": [3, 6]},
+    "prose": {
+      "brief": "2-3 sentences naming the ship date and the deferral, under 400 characters",
+      "summary": "several paragraphs following the discussion in order, materially longer than the brief and not a restatement of it"
+    }
+  }
+}

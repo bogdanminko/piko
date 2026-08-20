@@ -1,0 +1,41 @@
+{
+  "id": "en-unowned-tasks",
+  "task": "extract",
+  "lang": "en",
+  "output_language": "English",
+  "why": "Half the tasks agreed on a real call name nobody. This one names exactly one person, and everything else is either 'I'll do it' from a side of the call or a problem stated with no fix. The failures to catch: a speaker label written into owner, and one named person collecting every task in the meeting.",
+  "speakers": {"me": "You", "them": "Participants"},
+  "segments": [
+    {"start": 0.0, "speaker": "me", "text": "Three things before we finish."},
+    {"start": 3.0, "speaker": "them", "text": "Go."},
+    {"start": 4.5, "speaker": "me", "text": "The onboarding emails are still going out with the old logo."},
+    {"start": 10.0, "speaker": "them", "text": "I saw. That's the template in the marketing tool, not our code."},
+    {"start": 16.0, "speaker": "me", "text": "Can someone fix it this week?"},
+    {"start": 19.0, "speaker": "them", "text": "Someone will have to ask Priya, she's the only one with access."},
+    {"start": 25.0, "speaker": "me", "text": "Then it's Priya's, this week."},
+    {"start": 29.0, "speaker": "them", "text": "Second thing?"},
+    {"start": 31.0, "speaker": "me", "text": "The support inbox. We're at four hours to first response and the target is one."},
+    {"start": 38.0, "speaker": "them", "text": "That's staffing, not process. We're two people short on the afternoon shift."},
+    {"start": 45.0, "speaker": "me", "text": "I know. I don't have a fix today."},
+    {"start": 49.0, "speaker": "them", "text": "Understood."},
+    {"start": 51.0, "speaker": "me", "text": "Third, the API docs are a version behind."},
+    {"start": 55.0, "speaker": "them", "text": "They are. Whoever ships the next endpoint should update them in the same pull request."},
+    {"start": 62.0, "speaker": "me", "text": "Agreed, that's the rule from now on. Docs in the same pull request as the endpoint."},
+    {"start": 69.0, "speaker": "them", "text": "I'll put it in the review checklist."},
+    {"start": 73.0, "speaker": "me", "text": "Good. That's it."}
+  ],
+  "key": {
+    "people": ["Priya"],
+    "must_find": [
+      {"field": "decisions", "what": "Docs ship in the same pull request as the endpoint, from now on", "lines": [14, 15]},
+      {"field": "action_items", "what": "Fix the old logo in the onboarding email template this week", "lines": [6, 7], "owner": "Priya", "due": "this week"},
+      {"field": "action_items", "what": "Add the docs rule to the review checklist", "lines": [16], "owner": null},
+      {"field": "open_questions", "what": "How to get support first response from four hours to one — stated as staffing, no fix today", "lines": [9, 10, 11]}
+    ],
+    "traps": [
+      {"id": "staffing-decision", "field": "decisions", "forbid": ["hire", "staff", "shift", "headcount"], "why": "the response time was raised and explicitly left without a fix"},
+      {"id": "priya-collects", "field": "action_items", "forbid": ["priya will add", "priya to add", "priya will update the review"], "why": "the only named person must not inherit the tasks nobody was given"}
+    ],
+    "expect_counts": {"decisions": [1, 2], "action_items": [2, 3], "open_questions": [1, 2], "topics": [2, 5]}
+  }
+}

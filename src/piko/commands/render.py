@@ -7,9 +7,11 @@ from pathlib import Path
 
 from ..cache import CACHE_DIR
 from ..core.media import burn_subtitles, get_video_duration, get_video_resolution
+from ..core.memory import InsufficientMemoryError
 from ..protocol import emit
-from ..skills.captions import generate_subtitles
-from .transcribe import DEFAULT_MODEL, count_words, transcribe_video
+from ..skills.captions import generate_subtitles, save_plain_subtitles
+from ..skills.captions.keyword_detector import detect_keywords
+from .transcribe import DEFAULT_MODEL, count_words, format_clock, transcribe_video
 
 
 def _render(
@@ -21,9 +23,32 @@ def _render(
     subtitle_only: bool,
     word_mode: str = "static",
     highlight_color: str | None = None,
+    broll: bool = False,
 ) -> None:
     """Generate .ass for the style and burn it into the video."""
     width, height = get_video_resolution(video_path)
+
+    # B-roll cut-ins are composed first, so subtitles burn on top of them.
+    broll_temp: Path | None = None
+    broll_count = 0
+    if broll and not subtitle_only:
+        from ..core.broll import BRollLibrary, compose_broll, plan_inserts
+
+        inserts = plan_inserts(segments, BRollLibrary())
+        if inserts:
+            broll_count = len(inserts)
+            emit(
+                {
+                    "type": "progress",
+                    "stage": "broll",
+                    "percent": 2,
+                    "message": f"Inserting {broll_count} b-roll clips...",
+                }
+            )
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            broll_temp = Path(output_path).with_suffix(".broll.mp4")
+            compose_broll(video_path, inserts, broll_temp)
+            video_path = str(broll_temp)
 
     emit(
         {
@@ -35,7 +60,7 @@ def _render(
     )
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     ass_path = Path(output_path).with_suffix(".ass")
-    subs, emoji_timeline = generate_subtitles(
+    _, emoji_timeline = generate_subtitles(
         segments,
         style_name=style,
         output_path=ass_path,
@@ -44,6 +69,11 @@ def _render(
         word_mode=word_mode,
         highlight_color=highlight_color,
     )
+
+    # The cheapest rung of the export ladder, written every time: an .srt
+    # costs nothing to produce and is the only subtitle file YouTube, Vimeo
+    # and every editor read. It must never sit behind a re-encode.
+    plain_paths = save_plain_subtitles(segments, ass_path)
 
     if not subtitle_only:
         emit(
@@ -74,7 +104,11 @@ def _render(
                     "type": "progress",
                     "stage": "burning",
                     "percent": round(pct, 1),
-                    "message": "Burning subtitles...",
+                    "message": (
+                        f"Burning subtitles {format_clock(seconds)} / {format_clock(duration)}"
+                    ),
+                    "processed_seconds": round(seconds, 1),
+                    "total_seconds": round(duration, 1),
                 }
             )
 
@@ -87,18 +121,29 @@ def _render(
             video_height=height,
         )
 
-    markers = ("\\c&H00FFFF&", "\\c&H0000FF&", "\\c&H00FF00&", "\\i1")
-    keyword_count = sum(1 for e in subs.events if any(m in e.text for m in markers))
+    if broll_temp is not None:
+        broll_temp.unlink(missing_ok=True)
+
+    # Counted from the detection itself rather than by grepping colour tags
+    # out of the events: tiktok marks keywords with no tag at all (always
+    # reported 0), hormozi's orange was not in the list, and reveal/highlight
+    # repeat a keyword once per word in its card (reported several times).
+    keyword_count = sum(1 for w in detect_keywords(segments) if w.get("is_keyword"))
+
     emit(
         {
             "type": "result",
             "success": True,
-            "output_path": str(output_path),
+            # subtitle_only writes no video, so it must not claim one.
+            "output_path": None if subtitle_only else str(output_path),
             "subtitle_path": str(ass_path),
+            "srt_path": plain_paths["srt"],
+            "vtt_path": plain_paths["vtt"],
             "language": language,
             "style": style,
             "word_count": count_words(segments),
             "keywords_found": keyword_count,
+            "broll_inserts": broll_count,
         }
     )
 
@@ -128,6 +173,7 @@ def handle_render(params: dict) -> None:
             subtitle_only,
             word_mode=word_mode,
             highlight_color=highlight_color,
+            broll=params.get("broll", False),
         )
     except Exception as e:
         emit({"type": "error", "message": str(e), "code": type(e).__name__})
@@ -157,6 +203,9 @@ def handle_process(params: dict) -> None:
             subtitle_only,
             word_mode=params.get("word_mode", "static"),
             highlight_color=params.get("highlight_color"),
+            broll=params.get("broll", False),
         )
+    except InsufficientMemoryError as e:
+        emit({"type": "error", "message": str(e), "code": "INSUFFICIENT_MEMORY"})
     except Exception as e:
         emit({"type": "error", "message": str(e), "code": type(e).__name__})

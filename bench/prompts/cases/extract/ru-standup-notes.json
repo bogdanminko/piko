@@ -1,0 +1,46 @@
+{
+  "id": "ru-standup-notes",
+  "task": "extract",
+  "lang": "ru",
+  "output_language": "Russian",
+  "why": "Three failures at once: a Russian transcript under an English system prompt (the answer drifts into English below 4B), ASR punctuation-free run-ons, and a typed note that contradicts what the ASR heard. The note says the owner is Дима; the transcript says «митрий». The note has to win.",
+  "speakers": {"me": "You", "them": "Participants"},
+  "segments": [
+    {"start": 0.0, "speaker": "me", "text": "так давайте быстро у нас пятнадцать минут"},
+    {"start": 4.0, "speaker": "them", "text": "у меня по индексации всё выкатили вчера вечером"},
+    {"start": 9.0, "speaker": "them", "text": "но с утра латенси подскочило примерно вдвое на поиске"},
+    {"start": 15.0, "speaker": "me", "text": "вдвое это с чего до чего"},
+    {"start": 18.0, "speaker": "them", "text": "было сто восемьдесят миллисекунд стало где-то триста пятьдесят"},
+    {"start": 24.0, "speaker": "me", "text": "причину нашли"},
+    {"start": 27.0, "speaker": "them", "text": "нет пока непонятно кэш прогрет графики ровные"},
+    {"start": 33.0, "speaker": "me", "text": "тогда откатываем фича-флаг до выяснения"},
+    {"start": 38.0, "speaker": "them", "text": "согласен откачу сейчас"},
+    {"start": 42.0, "speaker": "me", "text": "и заведи задачу разобраться почему выросло"},
+    {"start": 47.0, "speaker": "them", "text": "заведу"},
+    {"start": 49.0, "speaker": "me", "text": "митрий что там по биллингу"},
+    {"start": 53.0, "speaker": "them", "text": "ретраи доделал осталось тесты дописать"},
+    {"start": 58.0, "speaker": "them", "text": "к четвергу закрою"},
+    {"start": 62.0, "speaker": "me", "text": "хорошо"},
+    {"start": 64.0, "speaker": "them", "text": "ещё вопрос по отпускам кто-нибудь знает когда дедлайн на заявки"},
+    {"start": 70.0, "speaker": "me", "text": "не знаю уточню у эйчаров"}
+  ],
+  "notes": [
+    {"at": 57.0, "text": "биллинг ведёт Дима Кузнецов, ASR слышит его как «митрий»"}
+  ],
+  "key": {
+    "people": ["Дима", "Дима Кузнецов"],
+    "must_find": [
+      {"field": "decisions", "what": "Откатить фича-флаг индексации до выяснения причины", "lines": [8, 9]},
+      {"field": "action_items", "what": "Откатить фича-флаг", "lines": [8, 9], "owner": null},
+      {"field": "action_items", "what": "Завести задачу на разбор роста латентности", "lines": [10, 11], "owner": null},
+      {"field": "action_items", "what": "Дописать тесты по биллингу к четвергу", "lines": [12, 13, 14], "owner": "Дима", "due": "к четвергу"},
+      {"field": "open_questions", "what": "Почему латентность поиска выросла вдвое", "lines": [6, 7]},
+      {"field": "open_questions", "what": "Когда дедлайн на заявки на отпуск", "lines": [16, 17]}
+    ],
+    "traps": [
+      {"id": "asr-name", "field": "action_items", "forbid": ["митрий", "митрия", "митрию"], "why": "the note says the ASR misheard the name; an owner spelled from the transcript ignores the one input a person actually typed"},
+      {"id": "hr-answer", "field": "decisions", "forbid": ["эйчар", "hr", "отпуск"], "why": "asking HR is an unanswered question, not a settled choice"}
+    ],
+    "expect_counts": {"decisions": [1, 2], "action_items": [3, 4], "open_questions": [2, 3], "topics": [2, 5]}
+  }
+}

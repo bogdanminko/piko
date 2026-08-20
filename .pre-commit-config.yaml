@@ -1,5 +1,7 @@
 # Fast hygiene + the full quality gate (mypy/pytest/swift are scoped by
 # `files:` so unrelated commits stay fast).
+exclude: ^bench/
+
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0

@@ -7,10 +7,17 @@ import json
 from pathlib import Path
 
 from ..cache import CACHE_DIR
-from ..core.media import extract_audio
+from ..core.media import extract_audio, get_video_duration
+from ..core.memory import InsufficientMemoryError
 from ..protocol import emit
 
-DEFAULT_MODEL = "mlx-community/whisper-large-v3-mlx-8bit"
+DEFAULT_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
+
+
+def format_clock(seconds: float) -> str:
+    """65.3 -> "01:05"."""
+    total = int(seconds)
+    return f"{total // 60:02d}:{total % 60:02d}"
 
 
 def _transcription_cache_path(video_path: str, model: str, language: str | None) -> Path:
@@ -22,13 +29,19 @@ def _transcription_cache_path(video_path: str, model: str, language: str | None)
     return CACHE_DIR / "transcriptions" / f"{digest}.json"
 
 
-def transcribe_video(video_path: str, model: str, language: str | None) -> dict:
+def transcribe_video(
+    video_path: str, model: str, language: str | None, force: bool = False
+) -> dict:
     """Transcribe a video, using the cache if available.
+
+    `force` re-runs the model and overwrites the cache entry — the escape hatch
+    for a transcript that came out wrong, since the cache key only covers the
+    file, the model and the language, not how well it went.
 
     Returns dict: {"language": ..., "segments": [...], "path": <cache file>}.
     """
     cache_path = _transcription_cache_path(video_path, model, language)
-    if cache_path.exists():
+    if cache_path.exists() and not force:
         data = json.loads(cache_path.read_text())
         data["path"] = str(cache_path)
         data["cached"] = True
@@ -50,7 +63,31 @@ def transcribe_video(video_path: str, model: str, language: str | None) -> dict:
                 "message": "Transcribing audio...",
             }
         )
-        result = transcribe(str(audio_path), model=model, language=language)
+
+        # Realtime "processed X of Y" driven by mlx_whisper's per-segment
+        # verbose output; throttled to one event per second of audio.
+        duration = max(get_video_duration(video_path), 0.1)
+        last_reported = 0.0
+
+        def on_progress(seconds: float) -> None:
+            nonlocal last_reported
+            if seconds - last_reported < 1.0:
+                return
+            last_reported = seconds
+            emit(
+                {
+                    "type": "progress",
+                    "stage": "transcribing",
+                    "percent": round(min(10 + seconds / duration * 88, 98), 1),
+                    "message": (f"Transcribing {format_clock(seconds)} / {format_clock(duration)}"),
+                    "processed_seconds": round(seconds, 1),
+                    "total_seconds": round(duration, 1),
+                }
+            )
+
+        result = transcribe(
+            str(audio_path), model=model, language=language, progress_callback=on_progress
+        )
     finally:
         audio_path.unlink(missing_ok=True)
         audio_path.parent.rmdir()
@@ -77,7 +114,7 @@ def handle_transcribe(params: dict) -> None:
     language = params.get("language")
 
     try:
-        data = transcribe_video(video_path, model, language)
+        data = transcribe_video(video_path, model, language, force=bool(params.get("force")))
         emit(
             {
                 "type": "result",
@@ -88,5 +125,7 @@ def handle_transcribe(params: dict) -> None:
                 "cached": data["cached"],
             }
         )
+    except InsufficientMemoryError as e:
+        emit({"type": "error", "message": str(e), "code": "INSUFFICIENT_MEMORY"})
     except Exception as e:
         emit({"type": "error", "message": str(e), "code": type(e).__name__})

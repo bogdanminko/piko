@@ -1,0 +1,240 @@
+import SwiftUI
+
+/// The left column of the Meeting Summary screen: the summary itself, and
+/// everything that happens on the way to it.
+///
+/// Split out of `MeetingSummaryView` because progress belongs next to the thing
+/// being worked on. Both jobs used to report into the transcript card, so
+/// pressing Summarize looked like transcription had started instead.
+struct MeetingSummaryColumn: View {
+    @Bindable var meeting: MeetingVM
+    @Bindable var summarizer: SummarizerVM
+    let params: [String: Any]
+
+    @Environment(\.pikoTheme) private var theme
+    /// Rows waiting on the review sheet. Nil while nothing is being sent.
+    @State private var sendRequest: SendRequest?
+
+    /// Wrapper so `.sheet(item:)` can carry a selection of rows and where they
+    /// are headed.
+    struct SendRequest: Identifiable {
+        let id = UUID()
+        let items: [ComposedItem]
+        let target: TaskExporter.Target
+    }
+
+    var body: some View {
+        if let summary = meeting.composed, !summary.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                toolbar
+                ScrollView {
+                    MeetingSummaryCards(
+                        summary: summary,
+                        meeting: meeting,
+                        onSend: { sendRequest = SendRequest(items: $0, target: $1) }
+                    )
+                    .padding(.bottom, 8)
+                }
+                .sheet(item: $sendRequest) { request in
+                    if let recording = meeting.selected {
+                        ExportReviewSheet(items: request.items,
+                                          recording: recording,
+                                          meeting: meeting,
+                                          initialTarget: request.target) { target, sent in
+                            record(sent, target: target, from: summary)
+                        }
+                    }
+                }
+                // A rerun keeps the old cards on screen underneath: they are
+                // still valid until the new ones land, and blanking them would
+                // lose what the user was reading.
+                .opacity(meeting.progress(for: .summary) == nil ? 1 : 0.45)
+            }
+        } else if let progress = meeting.progress(for: .summary) {
+            card { running(progress) }
+        } else if let failure = meeting.failure(for: .summary) {
+            card { failed(failure) }
+        } else {
+            card { placeholder }
+        }
+    }
+
+    /// EventKit identifiers come back keyed by row id; each one is stored on
+    /// the row's edit so a second send updates that entry instead of cloning
+    /// it. Targets are tracked separately — a follow-up can legitimately be
+    /// both a task and an event.
+    private func record(_ identifiers: [String: String],
+                        target: TaskExporter.Target,
+                        from summary: ComposedSummary) {
+        for item in summary.actionItems {
+            guard let identifier = identifiers[item.id] else { continue }
+            meeting.recordExport(identifier, target: target.rawValue, for: item)
+        }
+    }
+
+    private func card<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionLabel(text: "Summary")
+                content()
+            }
+        }
+    }
+
+    /// Notes typed after the summary on disk was written — the ones it cannot
+    /// have read.
+    private var staleNotes: [MeetingNote] { meeting.notesMissingFromSummary }
+
+    /// Above the cards once a summary exists: language, rerun, and — during a
+    /// rerun — the progress that replaces both.
+    @ViewBuilder
+    private var toolbar: some View {
+        if let progress = meeting.progress(for: .summary) {
+            ThemedCard {
+                JobProgressRow(percent: progress.percent,
+                               message: progress.message,
+                               onStop: meeting.cancelWork)
+            }
+        } else if let recording = meeting.selected {
+            HStack {
+                if let failure = meeting.failure(for: .summary) {
+                    Text(failure)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.dim)
+                        .lineLimit(2)
+                }
+                // A summary written before a note was typed cannot have read
+                // it. Said rather than acted on: a rerun costs minutes of the
+                // model's time, and whether one line changes the answer is the
+                // reader's call, not this view's.
+                if !staleNotes.isEmpty {
+                    Text(staleNotes.count == 1
+                         ? "1 note came after this summary"
+                         : "\(staleNotes.count) notes came after this summary")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(theme.accent)
+                        .lineLimit(1)
+                }
+                Spacer()
+                SummaryLanguagePicker(summarizer: summarizer, disabled: meeting.isBusy)
+                RerunButton(title: "Rerun summary", disabled: meeting.isBusy) {
+                    Task { await meeting.summarize(recording, params: params, force: true) }
+                }
+                if let summary = meeting.composed {
+                    CopyButton(text: {
+                        MarkdownExport.make(summary, for: recording, notes: meeting.notes.notes)
+                    }, help: "Copy the whole summary")
+                }
+            }
+        }
+    }
+
+    private func running(_ progress: (percent: Double, message: String)) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            JobProgressRow(percent: progress.percent,
+                           message: progress.message,
+                           onStop: meeting.cancelWork)
+            // Named so the first run's silence is explained rather than
+            // mistaken for a stall: loading a 4 GB model takes a few seconds.
+            Text("Running \(summarizer.selected?.name ?? "the summarizer") on this Mac. "
+                 + "Nothing leaves the machine.")
+                .font(.system(size: 11))
+                .lineSpacing(2)
+                .foregroundStyle(theme.dim)
+        }
+    }
+
+    private func failed(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(message)
+                .font(.system(size: 12))
+                .lineSpacing(2)
+                .foregroundStyle(theme.dim)
+                .fixedSize(horizontal: false, vertical: true)
+            if let recording = meeting.selected {
+                HStack(spacing: 10) {
+                    Button("Try again") {
+                        Task { await meeting.summarize(recording, params: params, force: true) }
+                    }
+                    .buttonStyle(AccentButtonStyle())
+                    .disabled(meeting.isBusy)
+                    SummaryLanguagePicker(summarizer: summarizer, disabled: meeting.isBusy)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var placeholder: some View {
+        Text(meeting.transcript == nil
+             ? "Record or import a call, then transcribe it. The summary is built "
+               + "from the transcript, so it comes after."
+             : "Summarize the transcript into decisions, action items and open "
+               + "questions — each one linked to the moment it was said.")
+            .font(.system(size: 12.5))
+            .lineSpacing(3)
+            .foregroundStyle(theme.dim)
+        if let recording = meeting.selected, meeting.transcript != nil {
+            HStack(spacing: 10) {
+                Button("Summarize") {
+                    Task { await meeting.summarize(recording, params: params) }
+                }
+                .buttonStyle(AccentButtonStyle())
+                .disabled(meeting.isBusy)
+                SummaryLanguagePicker(summarizer: summarizer, disabled: meeting.isBusy)
+            }
+        }
+    }
+}
+
+/// Bar + stage message + Stop, shared by both jobs so they read identically
+/// wherever they appear.
+struct JobProgressRow: View {
+    let percent: Double
+    let message: String
+    let onStop: () -> Void
+
+    @Environment(\.pikoTheme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ProgressView(value: percent, total: 100)
+                .progressViewStyle(.linear)
+            HStack(spacing: 8) {
+                Text(message)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(theme.dim)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 6)
+                Button("Stop", action: onStop)
+                    .buttonStyle(.link)
+                    .font(.system(size: 11.5))
+            }
+        }
+    }
+}
+
+/// The quiet "do it again" action. It discards work the user already has, so it
+/// must not compete with the primary button beside it.
+struct RerunButton: View {
+    let title: String
+    let disabled: Bool
+    let action: () -> Void
+
+    @Environment(\.pikoTheme) private var theme
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(title)
+            }
+            .font(.system(size: 11.5))
+            .foregroundStyle(disabled ? theme.dim : theme.accent)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .help("Discard the current result and run it again")
+    }
+}

@@ -1,37 +1,40 @@
 import SwiftUI
 import AVKit
 
+/// AVPlayerView wrapper: unlike SwiftUI's VideoPlayer it shows the
+/// full-screen toggle in the inline controls.
+struct PlayerView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .inline
+        view.showsFullScreenToggleButton = true
+        return view
+    }
+
+    func updateNSView(_ nsView: AVPlayerView, context: Context) {
+        nsView.player = player
+    }
+}
+
 struct PreviewView: View {
     @Bindable var processor: VideoProcessorVM
-    var stylePreviews: StylePreviewsVM
     let onReset: () -> Void
 
     @State private var player: AVPlayer?
 
     var body: some View {
         VStack(spacing: 16) {
-            // Video player
+            // Video player — flexible height, full screen via its toggle.
+            // Style switching lives in the settings panel; it re-renders
+            // instantly from the cached transcription.
             if let player {
-                VideoPlayer(player: player)
-                    .frame(maxHeight: 380)
-                    .cornerRadius(12)
-                    .padding(.horizontal)
+                PlayerView(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-
-            // Style switcher — re-renders instantly from the cached
-            // transcription, no new Whisper run.
-            HStack(spacing: 8) {
-                ForEach(SubtitleStyleType.allCases) { style in
-                    StyleSwitchButton(
-                        style: style,
-                        isSelected: processor.selectedStyle == style,
-                        preview: stylePreviews.image(for: style)
-                    ) {
-                        processor.selectedStyle = style
-                    }
-                }
-            }
-            .padding(.horizontal)
 
             // Stats
             HStack(spacing: 24) {
@@ -41,25 +44,27 @@ struct PreviewView: View {
                           value: "\(processor.wordCount)")
                 StatBadge(icon: "star.fill", label: "Keywords",
                           value: "\(processor.keywordsFound)")
+                if let rtf = processor.realtimeFactor {
+                    StatBadge(icon: "speedometer", label: "Realtime",
+                              value: String(format: "%.1f×", rtf))
+                }
+                if let wps = processor.wordsPerSecond {
+                    StatBadge(icon: "gauge.with.dots.needle.67percent", label: "Words/s",
+                              value: String(format: "%.1f", wps))
+                }
             }
 
-            // Actions — the render lives in the app cache until the user
-            // explicitly saves it somewhere.
-            HStack(spacing: 12) {
-                Button("Save Video…") {
-                    processor.saveVideo()
-                }
-                .buttonStyle(.borderedProminent)
+            runTimeline
 
-                if processor.subtitleURL != nil {
-                    Button("Save Subtitles…") {
-                        processor.saveSubtitles()
-                    }
+            // Saving lives in the screen header (Save Video… / Save .srt…);
+            // the render stays in the app cache until then.
+            HStack(spacing: 10) {
+                // Back to the words without redoing anything — a wrong name
+                // is usually spotted here, watching the burned result.
+                if processor.hasTranscript {
+                    Button("Back to Transcript") { processor.showTranscript() }
                 }
-
-                Button("Process Another") {
-                    onReset()
-                }
+                Button("Process Another") { onReset() }
             }
             .padding(.bottom)
         }
@@ -73,39 +78,19 @@ struct PreviewView: View {
             player = newURL.map { AVPlayer(url: $0) }
         }
     }
-}
 
-struct StyleSwitchButton: View {
-    let style: SubtitleStyleType
-    let isSelected: Bool
-    let preview: NSImage?
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                if let preview {
-                    Image(nsImage: preview)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: 96, height: 32)
-                        .clipShape(RoundedRectangle(cornerRadius: 4))
-                }
-                Text(style.displayName)
-                    .font(.caption2.weight(isSelected ? .bold : .regular))
-            }
-            .padding(6)
-            .background(
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.clear)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .strokeBorder(isSelected ? Color.accentColor : Color.secondary.opacity(0.3),
-                                  lineWidth: isSelected ? 2 : 1)
-            )
+    /// "Started 14:03:21 → finished 14:03:58 · 37 s" for the last full run.
+    @ViewBuilder
+    private var runTimeline: some View {
+        if let started = processor.runStartedAt,
+           let finished = processor.runFinishedAt,
+           let seconds = processor.processingSeconds {
+            let begin = started.formatted(.dateTime.hour().minute().second())
+            let end = finished.formatted(.dateTime.hour().minute().second())
+            Text("Started \(begin) → finished \(end) · \(String(format: "%.1f", seconds)) s")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
     }
 }
 

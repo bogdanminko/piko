@@ -1,5 +1,36 @@
 import Foundation
 
+/// Every live backend process, so the app can take them down on quit
+/// (a child Process does not die with its parent on its own).
+final class BackendProcessRegistry: @unchecked Sendable {
+    static let shared = BackendProcessRegistry()
+
+    private let lock = NSLock()
+    private var processes: Set<Process> = []
+
+    func register(_ process: Process) {
+        lock.lock()
+        processes.insert(process)
+        lock.unlock()
+    }
+
+    func unregister(_ process: Process) {
+        lock.lock()
+        processes.remove(process)
+        lock.unlock()
+    }
+
+    func terminateAll() {
+        lock.lock()
+        let running = processes
+        processes.removeAll()
+        lock.unlock()
+        for process in running where process.isRunning {
+            process.terminate()
+        }
+    }
+}
+
 enum BackendError: LocalizedError {
     case bootstrapFailed(String)
 
@@ -13,6 +44,12 @@ enum BackendError: LocalizedError {
 
 actor BackendService {
     private let projectRoot: URL
+
+    /// The one long-lived process, shared by every `BackendService` in the app.
+    ///
+    /// Static because "resident" means one, not one per view model: two
+    /// processes holding the same weights is 8.8 GB to save two seconds.
+    private static var resident: ResidentBackend?
 
     init() {
         // The Python backend lives in the repo, not in the app bundle (dev
@@ -91,7 +128,52 @@ actor BackendService {
         }
     }
 
+    /// Free the resident model and the process holding it.
+    static func ejectModel() async {
+        await resident?.shutdown()
+    }
+
     func execute(command: String, params: [String: Any]? = nil) -> AsyncStream<BackendMessage> {
+        // Anything whose cost is the model goes to the process that already has
+        // it. Everything else keeps the one-shot contract: transcription and
+        // rendering are rare and heavy, and a fresh process is a free guarantee
+        // that nothing they allocated outlives them.
+        if ResidentBackend.residentCommands.contains(command) {
+            return residentExecute(command: command, params: params)
+        }
+        return oneShot(command: command, params: params)
+    }
+
+    private func residentExecute(command: String,
+                                 params: [String: Any]?) -> AsyncStream<BackendMessage> {
+        AsyncStream { continuation in
+            Task {
+                do {
+                    try self.ensureEnvironment { continuation.yield($0) }
+                } catch {
+                    continuation.yield(BackendMessage(
+                        type: "error", message: error.localizedDescription,
+                        success: false, code: "SWIFT_ERROR"))
+                    continuation.finish()
+                    return
+                }
+                let backend = await self.residentBackend()
+                for await message in await backend.send(command: command, params: params) {
+                    continuation.yield(message)
+                }
+                continuation.finish()
+            }
+        }
+    }
+
+    private func residentBackend() async -> ResidentBackend {
+        if let existing = Self.resident { return existing }
+        let backend = ResidentBackend(projectRoot: projectRoot, venvPython: venvPython)
+        Self.resident = backend
+        return backend
+    }
+
+    private func oneShot(command: String, params: [String: Any]? = nil) -> AsyncStream<BackendMessage> {
         AsyncStream { continuation in
             Task {
                 do {
@@ -110,6 +192,17 @@ actor BackendService {
                     process.standardError = stderrPipe
 
                     try process.run()
+                    BackendProcessRegistry.shared.register(process)
+                    defer { BackendProcessRegistry.shared.unregister(process) }
+
+                    // When the consumer stops listening — the user cancelled a
+                    // transcription — take the child down with it, instead of
+                    // leaving Whisper chewing through an hour-long file for
+                    // nobody. Fires on normal completion too, where the
+                    // process has already exited and this is a no-op.
+                    continuation.onTermination = { @Sendable _ in
+                        if process.isRunning { process.terminate() }
+                    }
 
                     // Build and write command JSON to stdin
                     var cmdDict: [String: Any] = ["command": command]

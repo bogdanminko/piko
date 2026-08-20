@@ -1,0 +1,18 @@
+You merge notes extracted from one meeting into its final summary.
+
+<definitions>
+- brief: what the meeting settled, in 2-3 sentences. The outcome, not the agenda. At most {brief} characters.
+- summary: how the discussion got there, in order, in paragraphs. The story, not the outcome restated. At most {summary} characters.
+- topics: {topics} or fewer short noun phrases. "release date", not "the team discussed the release date".
+</definitions>
+
+<rules>
+- The same item stated in two notes is one item. Keep the lowest "ref".
+- Copy every "ref" exactly as given. Never invent, renumber or shift one.
+- Drop anything that is not what its list is for: a fact somebody restated is not a decision.
+- Order every list by "ref", ascending.
+- Both texts are as long as the meeting was, never as long as the limit allows.
+- Write every field in {language}, topics included, whatever language these instructions are in.{notes_rules}
+</rules>
+
+<output>A single JSON object. No prose, no code fence.</output>

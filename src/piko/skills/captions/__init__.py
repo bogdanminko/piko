@@ -7,5 +7,6 @@ semantic colors/emoji → styled ASS events → ffmpeg burn-in.
 from __future__ import annotations
 
 from .generator import generate_subtitles
+from .plain import build_plain_subtitles, save_plain_subtitles
 
-__all__ = ["generate_subtitles"]
+__all__ = ["build_plain_subtitles", "generate_subtitles", "save_plain_subtitles"]

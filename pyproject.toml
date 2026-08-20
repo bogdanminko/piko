@@ -3,10 +3,19 @@ name = "piko"
 version = "0.1.0"
 description = "AI-powered viral subtitle generator for macOS"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.13"
 dependencies = [
     "huggingface-hub>=1.27.0",
+    "mlx-audio>=0.2.4",
+    # Explicit, not transitive via mlx-audio: core/llm's embedded backend is
+    # built on it, so its version is our concern.
+    "mlx-lm>=0.31.1",
     "mlx-whisper>=0.4.3",
+    # Only for the optional OpenAI-compatible provider (Ollama / LM Studio /
+    # OpenAI). Never imported unless that provider is selected.
+    "openai>=2.0",
     "pillow>=12.3.0",
     "pysubs2>=1.8.1",
 ]
@@ -32,6 +41,7 @@ dev = [
 target-version = "py313"
 line-length = 100
 src = ["src", "tests"]
+extend-exclude = ["bench"]
 
 [tool.ruff.lint]
 select = [
@@ -49,6 +59,9 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["S101"]  # pytest asserts
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
 [tool.mypy]
 python_version = "3.13"
 files = ["src/piko", "tests"]
@@ -58,5 +71,5 @@ warn_redundant_casts = true
 no_implicit_optional = true
 
 [[tool.mypy.overrides]]
-module = ["mlx_whisper.*", "pysubs2.*", "huggingface_hub.*", "PIL.*"]
+module = ["mlx_whisper.*", "mlx_audio.*", "mlx.*", "pysubs2.*", "huggingface_hub.*", "PIL.*"]
 ignore_missing_imports = true

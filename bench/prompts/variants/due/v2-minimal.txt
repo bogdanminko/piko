@@ -1,0 +1,11 @@
+Turn each spoken deadline into a calendar date, counted from <meeting_date>.
+
+<rules>
+- Echo each item's "index".
+- "date": YYYY-MM-DD, null unless the phrase names a day.
+- "time": HH:MM 24-hour, null unless the phrase says a time.
+- "later", "soon", "next sprint", "when X is done" name no day. Answer null.
+- Never answer earlier than <meeting_date>.
+</rules>
+
+<output>One JSON object, nothing else.</output>

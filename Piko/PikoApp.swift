@@ -9,6 +9,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        setDockIconForBareRuns()
+    }
+
+    /// Backend children don't die with the app on their own — take down any
+    /// in-flight transcription/render on quit. (If the app is SIGKILLed,
+    /// the backend's own parent-watchdog handles it instead.)
+    func applicationWillTerminate(_ notification: Notification) {
+        BackendProcessRegistry.shared.terminateAll()
+    }
+
+    /// A bundled launch gets the icon from Info.plist; a bare executable
+    /// has no bundle, so load the icns from the repo (dev machines only).
+    private func setDockIconForBareRuns() {
+        guard Bundle.main.bundleURL.pathExtension != "app" else { return }
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<4 {
+            dir.deleteLastPathComponent()
+            let icns = dir.appendingPathComponent("assets/icon/Piko.icns")
+            if let image = NSImage(contentsOf: icns) {
+                NSApp.applicationIconImage = image
+                return
+            }
+        }
     }
 }
 
@@ -20,7 +43,7 @@ struct PikoApp: App {
         WindowGroup {
             MainView()
         }
-        .windowStyle(.titleBar)
-        .defaultSize(width: 900, height: 600)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1440, height: 900)
     }
 }

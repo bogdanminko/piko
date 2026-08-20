@@ -1,0 +1,35 @@
+{
+  "id": "en-mixed",
+  "task": "due",
+  "lang": "en",
+  "output_language": "English",
+  "why": "Half of these phrases have a date and half do not, and the two errors are not equal. A missed date costs a field somebody types in. An invented one puts a deadline nobody agreed to into their Reminders.",
+  "meeting_date": "2026-03-04",
+  "meeting_weekday": "Wednesday",
+  "deadlines": [
+    "by Friday",
+    "when the API is ready",
+    "tomorrow",
+    "next sprint",
+    "by the 15th",
+    "Monday at 10",
+    "as soon as possible",
+    "before the end of the month",
+    "in two weeks",
+    "end of day"
+  ],
+  "key": {
+    "expected": [
+      {"index": 0, "date": "2026-03-06", "time": null},
+      {"index": 1, "date": null, "time": null},
+      {"index": 2, "date": "2026-03-05", "time": null},
+      {"index": 3, "date": null, "time": null},
+      {"index": 4, "date": "2026-03-15", "time": null},
+      {"index": 5, "date": "2026-03-09", "time": "10:00"},
+      {"index": 6, "date": null, "time": null},
+      {"index": 7, "date": "2026-03-31", "time": null},
+      {"index": 8, "date": "2026-03-18", "time": null},
+      {"index": 9, "date": "2026-03-04", "time": null}
+    ]
+  }
+}

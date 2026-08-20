@@ -17,6 +17,18 @@ struct BackendMessage: Decodable {
     let success: Bool?
     let outputPath: String?
     let subtitlePath: String?
+    /// Unstyled subtitle files, written on every render because they cost
+    /// nothing. `.srt` is what every platform and editor reads; `.ass` above
+    /// keeps the look but almost nothing else opens it.
+    let srtPath: String?
+    let vttPath: String?
+    /// One streamed piece of a chat answer (`{"type": "chat"}`). Tokens arrive
+    /// as they are decoded; the final `result` carries the whole text again.
+    let delta: String?
+    /// Sent once when a reasoning model has started thinking and nothing is
+    /// coming out yet — the seconds before the first visible token, which
+    /// without this look identical to a hang.
+    let thinking: Bool?
     let transcriptionPath: String?
     let language: String?
     let wordCount: Int?
@@ -28,16 +40,56 @@ struct BackendMessage: Decodable {
     let model: String?
     let style: String?
     let previews: [String: String]?
+    /// Realtime progress: seconds of media handled / total ("01:20 of 03:45").
+    let processedSeconds: Double?
+    let totalSeconds: Double?
+    /// How many local b-roll clips were cut into the render.
+    let brollInserts: Int?
+    /// Openly licensed candidates returned by search_broll.
+    let clips: [BrollClip]?
+    /// Summarizer model tiers offered for this Mac (list_llm_tiers).
+    let tiers: [LLMTier]?
+    let totalRamMb: Int?
+    /// Tier the backend picks for this machine. The UI must not derive this:
+    /// the largest tier that fits is deliberately NOT the default.
+    let defaultTier: String?
+    /// Sampling sliders, described by the backend so Settings hardcodes no ranges.
+    let samplingControls: [SamplingControl]?
+    /// Languages the summary can be written in, including the automatic option.
+    let languages: [SummaryLanguage]?
+    /// Whether a summarizer model is resident, and whether it is loading.
+    let llm: LLMStatus?
+    /// What one chat answer cost, reported on its final `result`.
+    let stats: ChatStats?
+    /// The finished meeting summary (summarize_meeting).
+    let summary: MeetingSummary?
+    let summaryPath: String?
+    /// Live download figures, so a 12 GB fetch shows bytes and speed rather
+    /// than an indeterminate bar.
+    let downloadedBytes: Int?
+    let bytesPerSecond: Int?
 
     init(type: String, stage: String? = nil, percent: Double? = nil,
          message: String? = nil, success: Bool? = nil,
          outputPath: String? = nil, subtitlePath: String? = nil,
+         srtPath: String? = nil, vttPath: String? = nil,
+         delta: String? = nil, thinking: Bool? = nil,
          transcriptionPath: String? = nil, language: String? = nil,
          wordCount: Int? = nil, keywordsFound: Int? = nil,
          models: [WhisperModel]? = nil, code: String? = nil,
          downloaded: Bool? = nil, cached: Bool? = nil,
          model: String? = nil, style: String? = nil,
-         previews: [String: String]? = nil) {
+         previews: [String: String]? = nil,
+         processedSeconds: Double? = nil, totalSeconds: Double? = nil,
+         brollInserts: Int? = nil, clips: [BrollClip]? = nil,
+         tiers: [LLMTier]? = nil, totalRamMb: Int? = nil,
+         defaultTier: String? = nil,
+         samplingControls: [SamplingControl]? = nil,
+         languages: [SummaryLanguage]? = nil,
+         llm: LLMStatus? = nil,
+         stats: ChatStats? = nil,
+         summary: MeetingSummary? = nil, summaryPath: String? = nil,
+         downloadedBytes: Int? = nil, bytesPerSecond: Int? = nil) {
         self.type = type
         self.stage = stage
         self.percent = percent
@@ -45,6 +97,10 @@ struct BackendMessage: Decodable {
         self.success = success
         self.outputPath = outputPath
         self.subtitlePath = subtitlePath
+        self.srtPath = srtPath
+        self.vttPath = vttPath
+        self.delta = delta
+        self.thinking = thinking
         self.transcriptionPath = transcriptionPath
         self.language = language
         self.wordCount = wordCount
@@ -56,17 +112,167 @@ struct BackendMessage: Decodable {
         self.model = model
         self.style = style
         self.previews = previews
+        self.processedSeconds = processedSeconds
+        self.totalSeconds = totalSeconds
+        self.brollInserts = brollInserts
+        self.clips = clips
+        self.tiers = tiers
+        self.totalRamMb = totalRamMb
+        self.defaultTier = defaultTier
+        self.samplingControls = samplingControls
+        self.languages = languages
+        self.llm = llm
+        self.stats = stats
+        self.summary = summary
+        self.summaryPath = summaryPath
+        self.downloadedBytes = downloadedBytes
+        self.bytesPerSecond = bytesPerSecond
     }
 
     enum CodingKeys: String, CodingKey {
         case type, stage, percent, message, success
         case outputPath = "output_path"
         case subtitlePath = "subtitle_path"
+        case srtPath = "srt_path"
+        case vttPath = "vtt_path"
+        case delta, thinking
         case transcriptionPath = "transcription_path"
         case language
         case wordCount = "word_count"
         case keywordsFound = "keywords_found"
         case models, code, downloaded, cached, model, style, previews
+        case processedSeconds = "processed_seconds"
+        case totalSeconds = "total_seconds"
+        case brollInserts = "broll_inserts"
+        case clips, tiers, llm, stats
+        case totalRamMb = "total_ram_mb"
+        case defaultTier = "default_tier"
+        case samplingControls = "sampling_controls"
+        case languages
+        case summary
+        case summaryPath = "summary_path"
+        case downloadedBytes = "downloaded_bytes"
+        case bytesPerSecond = "bytes_per_second"
+    }
+}
+
+/// A language the summary can be written in. An empty code means "same as the
+/// recording" — the default, so nothing has to be chosen before the first run.
+struct SummaryLanguage: Codable, Identifiable, Hashable {
+    let code: String
+    let name: String
+
+    var id: String { code }
+}
+
+/// One sampling slider, fully described by the backend (src/piko/core/llm/sampling.py)
+/// so the settings panel never hardcodes a range or a default.
+struct SamplingControl: Codable, Identifiable, Hashable {
+    let key: String
+    let label: String
+    let min: Double
+    let max: Double
+    let step: Double
+    let `default`: Double
+    /// Render as a whole number (top-k, max tokens) rather than a decimal.
+    let integer: Bool
+    let help: String
+
+    var id: String { key }
+}
+
+/// One summarizer model tier (list_llm_tiers). The UI picks a tier, never a
+/// repo id — the mapping lives in src/piko/core/llm/registry.py.
+struct LLMTier: Codable, Identifiable, Hashable {
+    let id: String
+    let tier: String
+    let name: String
+    let sizeMb: Int
+    let ramMb: Int
+    let contextTokens: Int
+    var downloaded: Bool
+    /// False when this Mac lacks the RAM: show it greyed with the requirement
+    /// rather than hiding it, so the limit is legible.
+    let available: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case id, tier, name, downloaded, available
+        case sizeMb = "size_mb"
+        case ramMb = "ram_mb"
+        case contextTokens = "context_tokens"
+    }
+}
+
+/// What one answer cost.
+///
+/// Four numbers with two different sources, kept apart on purpose. `promptTps`
+/// and `generationTps` are mlx-lm's own rates for the two halves of a run —
+/// reading the prompt and writing the answer. `ttftSeconds` and `totalSeconds`
+/// are wall-clock around the whole thing, so they include a cold model's load,
+/// the prompt being built, and the protocol. A run that felt slow shows it here
+/// even when the model's rates were fine, which is the point.
+struct ChatStats: Codable, Hashable {
+    let promptTokens: Int?
+    let generationTokens: Int?
+    let promptTps: Double?
+    let generationTps: Double?
+    let ttftSeconds: Double?
+    let totalSeconds: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+        case generationTokens = "generation_tokens"
+        case promptTps = "prompt_tps"
+        case generationTps = "generation_tps"
+        case ttftSeconds = "ttft_seconds"
+        case totalSeconds = "total_seconds"
+    }
+}
+
+/// Whether the summarizer is resident, so the UI can show "warming up…".
+struct LLMStatus: Codable, Hashable {
+    let loaded: Bool
+    let loading: Bool
+    let modelKey: String?
+    let matchesRequest: Bool
+    let warmupError: String?
+    /// Seconds since the model last did any work, and how long it may sit
+    /// there before it gives the memory back on its own.
+    let idleSeconds: Double?
+    let releasesAfter: Double?
+    /// What the process is actually holding — reported by MLX rather than
+    /// estimated from a benchmark, because the number worth showing somebody is
+    /// the one their machine has right now.
+    let activeBytes: Int?
+    let cacheBytes: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case loaded, loading
+        case modelKey = "model_key"
+        case matchesRequest = "matches_request"
+        case warmupError = "warmup_error"
+        case idleSeconds = "idle_seconds"
+        case releasesAfter = "releases_after"
+        case activeBytes = "active_bytes"
+        case cacheBytes = "cache_bytes"
+    }
+}
+
+/// One openly licensed b-roll candidate from Wikimedia Commons.
+struct BrollClip: Codable, Identifiable, Hashable {
+    let title: String
+    let url: String
+    let license: String
+    let width: Int?
+    let sizeMb: Double?
+    /// Still-frame preview URL from Commons (jpg).
+    let thumb: String?
+
+    var id: String { url }
+
+    enum CodingKeys: String, CodingKey {
+        case title, url, license, width, thumb
+        case sizeMb = "size_mb"
     }
 }
 
@@ -74,11 +280,20 @@ struct WhisperModel: Codable, Identifiable {
     let id: String
     let name: String
     let sizeMb: Int
+    let ramMb: Int
+    let speed: String
+    let quality: String
     var downloaded: Bool
+    /// "asr" (one of them transcribes) or "speakers" (optional, runs after).
+    /// Optional so a payload from a backend that predates the split decodes.
+    let kind: String?
+
+    var isSpeakerModel: Bool { kind == "speakers" }
 
     enum CodingKeys: String, CodingKey {
-        case id, name
+        case id, name, speed, quality, kind
         case sizeMb = "size_mb"
+        case ramMb = "ram_mb"
         case downloaded
     }
 }
@@ -88,6 +303,9 @@ struct WhisperModel: Codable, Identifiable {
 enum ProcessingState: Equatable {
     case idle
     case processing(stage: String, percent: Double, message: String)
+    /// Words are on screen and every free export is available. The burn —
+    /// the one step that costs a re-encode — waits for the user to ask.
+    case transcribed
     case done(outputPath: String, subtitlePath: String)
     case error(message: String)
 }

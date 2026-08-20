@@ -1,8 +1,13 @@
 # Piko — Product
 
-**Open-source local AI workspace for macOS, powered by small models.**
+**Artifacts that finish the job — open source, and local to your Mac.**
 
-> Small models. Useful skills. Everything stays on your Mac.
+> An artifact you can ask for is half a result. Piko carries it the rest of the
+> way: recording to transcript to summary to action items that land in the
+> calendar and the tracker, with no plumbing in between.
+
+Which model does the work is an implementation detail, and swappable. What is
+not negotiable is where it runs (this Mac) and how far it goes (all the way).
 
 ## Who it's for
 
@@ -41,14 +46,12 @@ the box, costs no subscription, and nothing leaves their machine.
    settings, not a longer picker.
 4. **Local by default** — all processing on-device.
 
-## Shipped
-
-**Captions** — Video → Transcription → Timed Captions → Styled Video.
-Not a separate app; the first skill inside the Piko system.
-
-## Now building: Meeting Summary
+## Meeting Summary — the furthest along, and the current focus
 
 Audio/Video → Transcription → Structured Summary → Editable Result → Export.
+
+Recording, speaker attribution, summarization and export all work today. What
+keeps it from being called finished is the bar below, not missing pieces.
 
 **Definition of done** — the user drops an hour-long call recording and, fully
 locally on a 16 GB M-series Mac without swapping, gets:
@@ -60,6 +63,12 @@ locally on a 16 GB M-series Mac without swapping, gets:
 - an editable result and Markdown export.
 
 Until every line above works end-to-end, Meeting Summary is not done.
+
+## Captions
+
+Video → Transcription → Timed Captions → Styled Video. The first skill built,
+and still the proof that the shape generalises: a different input, a different
+result, the same path from request to finished thing.
 
 *Technical shape of artifacts, skills, and the model runtime lives in
 [ARCHITECTURE.md](ARCHITECTURE.md) — direction, not commitment.*

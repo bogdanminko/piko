@@ -1,0 +1,34 @@
+{
+  "id": "de-short-call",
+  "task": "extract",
+  "lang": "de",
+  "output_language": "German",
+  "why": "A third language, and a short one. Russian is settled by script alone, so it cannot tell you whether a prompt holds a Latin-script language it was not written in — a German transcript under an English prompt is the case that drifts quietly.",
+  "speakers": {"me": "You", "them": "Participants"},
+  "segments": [
+    {"start": 0.0, "speaker": "me", "text": "Kurz zum Freitag, steht der Termin beim Kunden?"},
+    {"start": 5.0, "speaker": "them", "text": "Der Termin steht, vierzehn Uhr, bei uns im Haus."},
+    {"start": 11.0, "speaker": "me", "text": "Wer hält die Präsentation?"},
+    {"start": 14.0, "speaker": "them", "text": "Ich mache den technischen Teil, den kommerziellen sollte Kerstin machen."},
+    {"start": 21.0, "speaker": "me", "text": "Gut, dann frag Kerstin bitte heute noch."},
+    {"start": 26.0, "speaker": "them", "text": "Mache ich."},
+    {"start": 28.0, "speaker": "me", "text": "Und die Preisliste, ist die aktuell?"},
+    {"start": 32.0, "speaker": "them", "text": "Die ist von März. Ob es eine neuere gibt, weiß ich nicht."},
+    {"start": 38.0, "speaker": "me", "text": "Dann klären wir das vorher, sonst nehmen wir die alte nicht mit."},
+    {"start": 44.0, "speaker": "them", "text": "Einverstanden."}
+  ],
+  "key": {
+    "people": ["Kerstin"],
+    "must_find": [
+      {"field": "decisions", "what": "Der Kundentermin am Freitag um 14 Uhr im eigenen Haus steht", "lines": [1, 2]},
+      {"field": "decisions", "what": "Der technische Teil wird selbst präsentiert, der kommerzielle von Kerstin", "lines": [4]},
+      {"field": "action_items", "what": "Kerstin heute noch fragen", "lines": [5], "owner": null, "due": "heute"},
+      {"field": "open_questions", "what": "Ob es eine neuere Preisliste als die von März gibt", "lines": [7, 8]}
+    ],
+    "traps": [
+      {"id": "kerstin-confirmed", "field": "decisions", "forbid": ["kerstin hat zugesagt", "kerstin sagt zu", "kerstin bestätigt"], "why": "Kerstin has not been asked yet — that is the task, not a fact"},
+      {"id": "new-pricelist", "field": "decisions", "forbid": ["neue preisliste", "aktuelle preisliste wird"], "why": "whether a newer price list exists is unknown to everyone in the room"}
+    ],
+    "expect_counts": {"decisions": [1, 3], "action_items": [1, 2], "open_questions": [1, 2], "topics": [2, 4]}
+  }
+}
