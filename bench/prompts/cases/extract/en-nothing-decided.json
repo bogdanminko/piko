@@ -1,0 +1,41 @@
+{
+  "id": "en-nothing-decided",
+  "task": "extract",
+  "lang": "en",
+  "output_language": "English",
+  "why": "The sharpest instrument here. A discovery call settles nothing and assigns nobody: the honest answer is two empty lists, and the tempting one is three sentences that look like decisions. A prompt that cannot leave a list empty will invent items for every real meeting too, where it is far harder to see.",
+  "speakers": {"me": "You", "them": "Participants"},
+  "segments": [
+    {"start": 0.0, "speaker": "me", "text": "Thanks for making time. I mostly want to understand how you do this today."},
+    {"start": 6.0, "speaker": "them", "text": "Sure. Today it's a spreadsheet. Two of them, actually."},
+    {"start": 11.0, "speaker": "me", "text": "Who maintains them?"},
+    {"start": 13.5, "speaker": "them", "text": "Whoever notices they're wrong. Which is usually me, but not officially."},
+    {"start": 20.0, "speaker": "me", "text": "And when something changes, how does the rest of the team find out?"},
+    {"start": 26.0, "speaker": "them", "text": "They don't, really. Someone posts in the channel if they remember."},
+    {"start": 32.0, "speaker": "me", "text": "Does that cause problems, or is it mostly fine?"},
+    {"start": 36.5, "speaker": "them", "text": "Mostly fine until quarter end. Then it's not fine at all."},
+    {"start": 42.0, "speaker": "me", "text": "What breaks at quarter end?"},
+    {"start": 45.0, "speaker": "them", "text": "The numbers don't tie out and we spend three days finding out why."},
+    {"start": 51.0, "speaker": "me", "text": "Three days of one person, or three days of the team?"},
+    {"start": 55.0, "speaker": "them", "text": "Two people, roughly. Sometimes three."},
+    {"start": 59.0, "speaker": "me", "text": "Have you tried anything to fix it?"},
+    {"start": 62.0, "speaker": "them", "text": "We looked at a tool last year. I can't remember why we didn't buy it."},
+    {"start": 69.0, "speaker": "me", "text": "Does anyone still have that evaluation?"},
+    {"start": 73.0, "speaker": "them", "text": "No idea. It might be in someone's drive."},
+    {"start": 78.0, "speaker": "me", "text": "Okay. I'm not going to propose anything today, I just wanted the picture."},
+    {"start": 85.0, "speaker": "them", "text": "Makes sense. Happy to keep talking."}
+  ],
+  "key": {
+    "people": [],
+    "must_find": [
+      {"field": "open_questions", "what": "Why the tool evaluated last year was never bought", "lines": [14]},
+      {"field": "open_questions", "what": "Whether that evaluation still exists anywhere", "lines": [15, 16]}
+    ],
+    "traps": [
+      {"id": "invented-followup", "field": "action_items", "forbid": ["follow up", "follow-up", "schedule", "share", "find the evaluation", "look for", "send"], "why": "the call closes on 'happy to keep talking'; no task was agreed"},
+      {"id": "invented-decision", "field": "decisions", "forbid": ["spreadsheet", "tool", "quarter", "process"], "why": "nothing at all was settled — any decision text is invention"}
+    ],
+    "expect_empty": ["decisions", "action_items"],
+    "expect_counts": {"open_questions": [1, 3], "topics": [2, 5]}
+  }
+}

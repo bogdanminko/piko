@@ -1,0 +1,52 @@
+{
+  "id": "en-release-call",
+  "task": "extract",
+  "lang": "en",
+  "output_language": "English",
+  "why": "The ordinary case done well: a date settled by rejecting another one, three tasks of which only one names a person, and a pile of options nobody chose. Most of the damage a summarizer can do lives in that last part.",
+  "speakers": {"me": "You", "them": "Participants"},
+  "segments": [
+    {"start": 0.0, "speaker": "me", "text": "Right, we're twelve minutes in and I want the release date settled before anything else."},
+    {"start": 7.5, "speaker": "them", "text": "Fine by me. QA finished the regression pass last night, two things still open."},
+    {"start": 14.0, "speaker": "me", "text": "Open how? Blocking or cosmetic?"},
+    {"start": 17.0, "speaker": "them", "text": "Cosmetic. The empty state on the billing page is misaligned in a narrow window."},
+    {"start": 24.0, "speaker": "me", "text": "Then it doesn't block. Are we still saying Friday?"},
+    {"start": 29.0, "speaker": "them", "text": "I'd rather not ship on a Friday. If it breaks nobody is around until Monday."},
+    {"start": 36.0, "speaker": "me", "text": "That's fair. Thursday then."},
+    {"start": 39.5, "speaker": "them", "text": "Thursday works. I'll cut the release branch Wednesday evening."},
+    {"start": 45.0, "speaker": "me", "text": "Good. Ship Thursday, branch cut Wednesday. Can Marta take the release notes?"},
+    {"start": 52.0, "speaker": "them", "text": "Marta isn't on this call, but she owns release notes normally. I'll ping her."},
+    {"start": 59.0, "speaker": "me", "text": "Put it on her anyway, she'll see it in the summary."},
+    {"start": 64.0, "speaker": "them", "text": "Sure. One more thing, we're still on MySQL for the events table and it's groaning."},
+    {"start": 71.0, "speaker": "me", "text": "How bad?"},
+    {"start": 73.0, "speaker": "them", "text": "Writes are at about eighty percent of what the box can take at peak."},
+    {"start": 79.0, "speaker": "them", "text": "We could move that table to Postgres. Or shard it. Or just buy a bigger box."},
+    {"start": 86.0, "speaker": "me", "text": "Not this week. Write up the options and we'll look at it after the release."},
+    {"start": 93.0, "speaker": "them", "text": "I'll have the write-up by Tuesday."},
+    {"start": 97.0, "speaker": "me", "text": "Who would actually do the migration if we go that way?"},
+    {"start": 102.0, "speaker": "them", "text": "That's the bit I don't know. Nobody here has done it at this size."},
+    {"start": 109.0, "speaker": "me", "text": "Leave that open then."},
+    {"start": 112.0, "speaker": "me", "text": "Last thing, the pricing page copy. Did legal come back?"},
+    {"start": 118.0, "speaker": "them", "text": "Not yet. I chased them Monday, nothing since."},
+    {"start": 124.0, "speaker": "me", "text": "Chase again today please."},
+    {"start": 127.0, "speaker": "them", "text": "Will do."}
+  ],
+  "key": {
+    "people": ["Marta"],
+    "must_find": [
+      {"field": "decisions", "what": "Ship on Thursday rather than Friday", "lines": [7, 9]},
+      {"field": "decisions", "what": "Release branch is cut Wednesday evening", "lines": [8, 9]},
+      {"field": "decisions", "what": "The storage question waits until after the release", "lines": [16]},
+      {"field": "action_items", "what": "Marta writes the release notes", "lines": [9, 11], "owner": "Marta"},
+      {"field": "action_items", "what": "Write up the storage options by Tuesday", "lines": [16, 17], "owner": null, "due": "Tuesday"},
+      {"field": "action_items", "what": "Chase legal again today about the pricing copy", "lines": [23], "owner": null, "due": "today"},
+      {"field": "open_questions", "what": "Who would carry out the migration — nobody has done it at this size", "lines": [18, 19, 20]}
+    ],
+    "traps": [
+      {"id": "bigger-box", "field": "decisions", "forbid": ["bigger box"], "why": "one of three options thrown out in a single breath; nothing was chosen"},
+      {"id": "legal-approved", "field": "decisions", "forbid": ["legal approved", "approved by legal", "legal has approved", "legal sign-off"], "why": "legal never came back at all"},
+      {"id": "cosmetic-as-task", "field": "action_items", "forbid": ["misalign", "empty state"], "why": "explicitly ruled non-blocking and nobody was asked to fix it"}
+    ],
+    "expect_counts": {"decisions": [2, 4], "action_items": [3, 5], "open_questions": [1, 3], "topics": [3, 6]}
+  }
+}

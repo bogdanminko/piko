@@ -1,0 +1,13 @@
+Extract what this part of a meeting transcript states. Never add anything it does not.
+
+<rules>
+- Every item cites its line number in "ref".
+- decisions: settled choices, not options being weighed.
+- action_items: work someone agreed to do. "owner" is a named person or null, never a speaker label. "due" is the spoken phrase or null.
+- open_questions: asked here, unanswered here.
+- notes: 1-2 sentences on what this part covered.
+- Empty lists are fine.
+- Write every field in {language}.{notes_rules}
+</rules>
+
+<output>One JSON object, nothing else.</output>

@@ -1,0 +1,53 @@
+{
+  "id": "ru-thin",
+  "task": "reduce",
+  "lang": "ru",
+  "output_language": "Russian",
+  "why": "An eight-line meeting with one decision in it. The budget says the summary may run to 2000 characters, and the failure this case exists to catch is a prompt that reads a ceiling as a target — 2000 characters about a four-minute call is padding with a word count for an excuse. It also carries an untimed note, which reaches reduce and must not acquire a ref.",
+  "speakers": {"me": "You", "them": "Participants"},
+  "segments": [
+    {"start": 0.0, "speaker": "me", "text": "коротко по лендингу что там с макетом"},
+    {"start": 4.0, "speaker": "them", "text": "макет готов отдал вчера вечером в фигме"},
+    {"start": 9.0, "speaker": "me", "text": "шрифты те же что в приложении"},
+    {"start": 13.0, "speaker": "them", "text": "да шрифты оставил как есть ничего не менял"},
+    {"start": 18.0, "speaker": "me", "text": "тогда берём этот вариант в работу"},
+    {"start": 22.0, "speaker": "them", "text": "хорошо тогда я нарежу ассеты"},
+    {"start": 26.0, "speaker": "me", "text": "когда"},
+    {"start": 28.0, "speaker": "them", "text": "до конца недели"}
+  ],
+  "notes": [
+    {"text": "в работу идёт третья версия макета, не вторая"}
+  ],
+  "partials": [
+    {
+      "notes": "Короткое обсуждение лендинга: макет согласован, дальше нарезка ассетов.",
+      "topics": ["макет лендинга"],
+      "decisions": [
+        {"text": "Взять готовый макет лендинга в работу", "ref": 5}
+      ],
+      "action_items": [
+        {"text": "Нарезать ассеты", "owner": null, "due": "до конца недели", "ref": 6}
+      ],
+      "open_questions": []
+    }
+  ],
+  "key": {
+    "people": [],
+    "must_find": [
+      {"field": "decisions", "what": "Макет лендинга берут в работу", "lines": [5]},
+      {"field": "action_items", "what": "Нарезать ассеты до конца недели", "lines": [6]}
+    ],
+    "must_merge": [],
+    "should_drop": [],
+    "traps": [
+      {"id": "invented-question", "field": "open_questions", "forbid": ["шрифт", "срок", "версия", "дизайн"], "why": "nothing was left unanswered; every open question here is invention"}
+    ],
+    "expect_empty": ["open_questions"],
+    "expect_counts": {"decisions": [1, 1], "action_items": [1, 1], "topics": [1, 3]},
+    "prose": {
+      "brief": "one or two sentences; there is one decision to report",
+      "summary": "proportionate to an eight-line call — roughly 300-700 characters. Anything approaching the 2000-character ceiling is padding.",
+      "untimed_note": "the note that version 3 is the one going into production may be used, but it carries no line number and must not be given one"
+    }
+  }
+}

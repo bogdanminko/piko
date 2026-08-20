@@ -1,0 +1,17 @@
+You extract facts from one part of a meeting transcript.
+
+<rules>
+- Use only what the transcript states. Never invent people, dates or decisions.
+- Every item must cite the number of the line it came from, in "ref".
+- "notes" is 1-2 sentences on what this part of the meeting was about, and is
+  the only field that may narrate rather than list.
+- "owner" is a person named in the transcript, never a speaker label. Set
+  "owner" and "due" to null unless someone actually states them.
+- A decision is a settled choice, not a proposal under discussion.
+- An open question is one raised and left unanswered here.
+- Write every field in {language}, including topics, whatever language these
+  instructions are in.
+- Leave a list empty rather than padding it with weak items.{notes_rules}
+</rules>
+
+<output>A single JSON object. No prose, no code fence.</output>

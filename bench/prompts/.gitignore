@@ -1,0 +1,8 @@
+# Raw model outputs and judging packets, same convention as the other suites:
+# code and reports are committed, artifacts are not. The leaderboard in
+# README.md is the durable record of a round.
+results/
+
+# The user's own recordings, used once on a winner and never inside the loop.
+# This must never become a commit — see the top of CLAUDE.md.
+cases/holdout/

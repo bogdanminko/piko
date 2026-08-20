@@ -8,6 +8,7 @@ on-device (Apple Silicon) — the same hardware the product ships on.
 | [asr/](asr/README.md) | ✅ done | Speech-to-text: WER/CER × speed across ru/en/de/fr (piko-audio-bench) + long-form real-recording engine comparison |
 | [llm/](llm/README.md) | 🚧 planned | Local SLMs for Meeting Summary: quality × tokens/s (Qwen3.5 tiers etc.) |
 | [speakers/](speakers/README.md) | 🚧 open question | Who spoke: whether the ASR encoder's own states can replace the diarization model, probed per layer against two-track ground truth |
+| [prompts/](prompts/README.md) | ✅ round 1 | The system prompts themselves: candidates scored across all three tiers on faithfulness, coverage, filler and cost, behind hard gates for parsing, citations and language |
 
 ## The research environment
 
